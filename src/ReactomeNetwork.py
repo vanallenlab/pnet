@@ -25,7 +25,7 @@ class ReactomeNetwork:
         HUGO gene IDs as columns. Contains an entry for every relation in the Reactome dataset.
         :return: DataFrame with columns ['pathway', 'gene'] with binary relations between pathways and genes
         """
-        filename = 'data/reactome/ReactomePathways.gmt'
+        filename = '../data/reactome/ReactomePathways.gmt'
         genes_start_col = 2
         pathway_col = 1
         pathway2genes_list = []
@@ -47,7 +47,7 @@ class ReactomeNetwork:
         :param species: string of species to filter pathways for, default is HSA for human pathways
         :return: DataFrame with columns ['ID','pathway','species']
         """
-        filename = 'data/reactome/ReactomePathways.txt'
+        filename = '../data/reactome/ReactomePathways.txt'
         df = pd.read_csv(filename, sep="\t")
         df.columns = ["ID", "pathway", "species"]
         df = df[df["ID"].str.contains(species)]
@@ -61,7 +61,7 @@ class ReactomeNetwork:
         :param species: string of species to filter for, default is HSA for human
         :return: DataFrame with columns ['source','target'] for each parent-child relation in Reactome
         """
-        filename = 'data/reactome/ReactomePathwaysRelation.txt'
+        filename = '../data/reactome/ReactomePathwaysRelation.txt'
         df = pd.read_csv(filename, sep="\t")
         df.columns = ["source", "target"]
         df = df[df["target"].str.contains(species)]

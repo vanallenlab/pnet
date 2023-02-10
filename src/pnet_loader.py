@@ -27,11 +27,14 @@ class PnetDataset(Dataset):
             assert isinstance(genetic_data[inp], pd.DataFrame), f"input data values expected to be a dict, got" \
                                                                 f" {type(genetic_data[inp])}"
         self.genetic_data = genetic_data
-        self.additional_data = additional_data
         self.target = target
         self.gene_set = gene_set
 
         self.inds = indicies
+        if additional_data:
+            self.additional_data = additional_data
+        else:
+            self.additional_data = pd.DataFrame(index=self.inds)    # create empty dummy dataframe if no additional data
         self.target = self.target.loc[self.inds]
         self.genes = self.get_genes()
         self.input_df = self.unpack_input()
@@ -44,10 +47,7 @@ class PnetDataset(Dataset):
     def __getitem__(self, index):
         x = torch.tensor(self.input_df.iloc[index], dtype=torch.float)
         y = torch.tensor(self.target.iloc[index], dtype=torch.float)
-        if self.additional_data:
-            additional = torch.tensor(self.additional_data.iloc[index], dtype=torch.float)
-        else:
-            additional = torch.empty(0, 0)
+        additional = torch.tensor(self.additional_data.iloc[index], dtype=torch.float)
         return x, additional, y
 
     def get_genes(self):
@@ -55,6 +55,9 @@ class PnetDataset(Dataset):
         Generate list of genes which are present in all data modalities and in the list of genes to be considered
         :return: List(str); List of gene names
         """
+        # drop duplicated columns:
+        for inp in self.genetic_data:
+            self.genetic_data[inp] = self.genetic_data[inp].loc[:, ~self.genetic_data[inp].columns.duplicated()].copy()
         gene_sets = [set(self.genetic_data[inp].columns) for inp in self.genetic_data]
         if self.gene_set:
             gene_sets.append(self.gene_set)
@@ -70,6 +73,7 @@ class PnetDataset(Dataset):
         """
         input_df = pd.DataFrame(index=self.inds)
         for inp in self.genetic_data:
+            to_join = self.genetic_data[inp][self.genes]
             input_df = input_df.join(self.genetic_data[inp][self.genes], how='inner', rsuffix='_' + inp)
         print('generated input DataFrame of size {}'.format(input_df.shape))
         return input_df.loc[self.inds]
@@ -123,6 +127,8 @@ def generate_train_test(genetic_data, target, gene_set=None, additional_data=Non
 
 
 def to_dataloader(train_dataset, test_dataset, batch_size):
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=2,
+                              persistent_workers=True, pin_memory=True,)
+    val_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True, num_workers=2,
+                            persistent_workers=True, pin_memory=True,)
     return train_loader, val_loader

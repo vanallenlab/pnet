@@ -1,10 +1,15 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torchmetrics.classification import BinaryAUROC
+import numpy as np
 import torch.optim as optim
 import pytorch_lightning as pl
 import ReactomeNetwork
+import pnet_loader
+import Pnet
 from CustomizedLinear import masked_activation
+import util
 
 
 class PNET_Block(nn.Module):
@@ -105,3 +110,77 @@ class PNET_NN(pl.LightningModule):
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.hparams.lr)
+
+
+def fit(model, dataloader, optimizer):
+    pred_loss = nn.BCELoss(reduction='sum')
+    model.train()
+    running_loss = 0.0
+    running_acc = 0.0
+    for batch in dataloader:
+        gene_data, additional_data, y = batch
+        optimizer.zero_grad()
+        y_hat = model(gene_data, additional_data)
+        loss = pred_loss(torch.squeeze(y_hat), torch.squeeze(y))
+        acc = np.sum(y_hat.round().detach().numpy().squeeze() == y.detach().numpy().squeeze())
+        running_loss += loss.item()
+        running_acc += acc
+        loss.backward()
+        optimizer.step()
+    train_loss = running_loss/len(dataloader.dataset)
+    train_acc = running_acc/len(dataloader.dataset)
+    return train_loss, train_acc
+
+
+def validate(model, dataloader):
+    pred_loss = nn.BCELoss(reduction='sum')
+    model.eval()
+    running_loss = 0.0
+    running_acc = 0.0
+    for batch in dataloader:
+        gene_data, additional_data, y = batch
+        y_hat = model(gene_data, additional_data)
+        loss = pred_loss(torch.squeeze(y_hat), torch.squeeze(y))
+        acc = np.sum(y_hat.round().detach().numpy().squeeze() == y.detach().numpy().squeeze())
+        running_loss += loss.item()
+        running_acc += acc
+        loss.backward()
+    loss = running_loss / len(dataloader.dataset)
+    acc = running_acc / len(dataloader.dataset)
+    return loss, acc
+
+
+def train(model, train_loader, test_loader, lr=0.5e-4, weight_decay=1e-5, epochs=300, verbose=False):
+    optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+    early_stopper = util.EarlyStopper(patience=5, min_delta=0.01)
+    train_scores = {'loss':[], 'acc':[]}
+    test_scores = {'loss':[], 'acc':[]}
+    for epoch in range(epochs):
+        train_epoch_scores = fit(model, train_loader, optimizer)
+        test_epoch_scores = validate(model, test_loader)
+        for i, k in enumerate(train_scores):
+            train_scores[k].append(train_epoch_scores[i])
+            test_scores[k].append(test_epoch_scores[i])
+        if verbose:
+            print(f"Epoch {epoch + 1} of {epochs}")
+            print("Train scores: {}".format(train_epoch_scores))
+            print("Test scores: {}".format(test_epoch_scores))
+        if early_stopper.early_stop(test_epoch_scores[0]):
+            print('Hit early stopping criteria')
+            break
+    return model, train_scores, test_scores
+
+
+def run(genetic_data, target, gene_set=None, additional_data=None, test_split=0.2, seed=None, dropout=0.2,
+        lr=0.5e-4, weight_decay=1e-4, batch_size=64, epochs=300, verbose=False):
+    train_dataset, test_dataset = pnet_loader.generate_train_test(genetic_data, target, gene_set, additional_data,
+                                                                  test_split, seed)
+    reactome_network = ReactomeNetwork.ReactomeNetwork(train_dataset.get_genes())
+    model = PNET_NN(hparams=
+                    {'reactome_network':reactome_network, 'nbr_gene_inputs':len(genetic_data), 'dropout':dropout,
+                      'additional_dims':train_dataset.additional_data.shape[1], 'lr':lr, 'weight_decay':weight_decay}
+                    )
+    train_loader, test_loader = pnet_loader.to_dataloader(train_dataset, test_dataset, batch_size)
+    model, train_scores, test_scores = train(model, train_loader, test_loader, lr, weight_decay, epochs, verbose)
+    return model, train_scores, test_scores
+

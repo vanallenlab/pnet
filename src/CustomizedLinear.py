@@ -53,7 +53,6 @@ class CustomizedLinear(nn.Module):
     def reset_params_pos(self):
         """
         Same ase reset_params but only allowing for positive weights, sampling from U[0, 2*sqrt(nm)]
-        :return:
         """
         stdv = 1. / math.sqrt(self.weight.size(1))
         self.weight.data.uniform_(0, 2*stdv)
