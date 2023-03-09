@@ -4,7 +4,7 @@ import math
 
 
 class CustomizedLinear(nn.Module):
-    def __init__(self, mask, pos_weights=True, bias=True):
+    def __init__(self, mask, pos_weights=False, bias=True):
         """
         extended torch.nn module which mask connection.
         Arguments
@@ -32,12 +32,12 @@ class CustomizedLinear(nn.Module):
         else:
             self.register_parameter('bias', None)
 
-        if pos_weights:
-            self.reset_params_pos()
-        else:
-            self.reset_parameters()
+        # Initialization of parameters
+        nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))  # weight init
+        fan_in, _ = nn.init._calculate_fan_in_and_fan_out(self.weight)
+        bound = 1 / math.sqrt(fan_in)
+        nn.init.uniform_(self.bias, -bound, bound)  # bias init
 
-    # Initialization of parameters
     def reset_parameters(self):
         """
         Initialization of parameters, sampled from U[-sqrt(nm), sqrt(nm)] where n and m are the dimensions of the

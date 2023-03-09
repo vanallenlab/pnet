@@ -16,17 +16,18 @@ def select_non_constant_genes(df, cutoff=0.05):
     genes that have minimum percentage of unique values.
     :param df: pd.DataFrame; dataframe to select columns from
     :param cutoff: float; percentage of unique values we require
-    :return: pd.DataFrame; cleaned dataframe with only non-constant columns
+    :return: list(str); list of genes that are not constant in dataframe
     """
-    return df.loc[:, df.nunique()/df.count() > 0.05].copy()
+    return list(df.loc[:, df.nunique()/df.count() > 0.05].columns)
 
 
 class EarlyStopper:
-    def __init__(self, patience=1, min_delta=0):
+    def __init__(self, patience=1, min_delta=0, verbose=False):
         self.patience = patience
         self.min_delta = min_delta
         self.counter = 0
         self.min_validation_loss = np.inf
+        self.verbose = verbose
 
     def early_stop(self, validation_loss):
         if validation_loss < self.min_validation_loss:
@@ -34,7 +35,8 @@ class EarlyStopper:
             self.counter = 0
         elif validation_loss > (self.min_validation_loss + self.min_validation_loss*self.min_delta):
             self.counter += 1
-            print('exceeded delta')
+            if self.verbose:
+                print('exceeded delta')
             if self.counter >= self.patience:
                 return True
         return False

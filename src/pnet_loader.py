@@ -29,7 +29,7 @@ class PnetDataset(Dataset):
         self.genetic_data = genetic_data
         self.target = target
         self.gene_set = gene_set
-
+        self.altered_inputs = []
         self.inds = indicies
         if additional_data:
             self.additional_data = additional_data
@@ -73,7 +73,6 @@ class PnetDataset(Dataset):
         """
         input_df = pd.DataFrame(index=self.inds)
         for inp in self.genetic_data:
-            to_join = self.genetic_data[inp][self.genes]
             input_df = input_df.join(self.genetic_data[inp][self.genes], how='inner', rsuffix='_' + inp)
         print('generated input DataFrame of size {}'.format(input_df.shape))
         return input_df.loc[self.inds]
@@ -123,6 +122,15 @@ def generate_train_test(genetic_data, target, gene_set=None, additional_data=Non
     train_dataset = PnetDataset(genetic_data, target, train_inds, additional_data=additional_data, gene_set=gene_set)
     print('Initializing Test Dataset')
     test_dataset = PnetDataset(genetic_data, target, test_inds, additional_data=additional_data, gene_set=gene_set)
+    # couple lines to add some genes with a signal perfectly correlated with the target
+    # for n in range(2):
+    #     r = random.randint(0, len(train_dataset.input_df.columns))
+    #     altered_input_col = train_dataset.input_df.columns[r]
+    #     train_dataset.altered_inputs.append(altered_input_col)
+    #     test_dataset.altered_inputs.append(altered_input_col)
+    #     print('set {} in input to target variable'.format(altered_input_col))
+    #     train_dataset.input_df[train_dataset.input_df.columns[r]] = train_dataset.target
+    #     test_dataset.input_df[test_dataset.input_df.columns[r]] = test_dataset.target
     return train_dataset, test_dataset
 
 

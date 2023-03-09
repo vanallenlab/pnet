@@ -4,7 +4,7 @@ import pandas as pd
 
 
 class ReactomeNetwork:
-    def __init__(self, gene_list, trim=0):
+    def __init__(self, gene_list, trim=0, max_depth=6):
         # Loading connections and setting up graph
         self.gene_list = gene_list
         self.pathway2genes = self.load_pathway2genes()
@@ -13,16 +13,21 @@ class ReactomeNetwork:
         self.graph = self.generate_graph()
 
         # Store metadata and prepare for mask extraction
-        self.max_level = self.get_number_of_layers()
+        self.max_level = min(self.get_number_of_layers(), max_depth)
         self.nodes_per_level = self.get_nodes_at_levels()
 
         # Generate layers of Graph as Adjacency matrices
         self.gene_layers, self.pathway_layers = self.get_layers(trim)
+        # Remove gene inputs which flow into children pathways as well
+        for layer in reversed(self.gene_layers[1:]):
+            for pathway in layer.columns:
+                self.clean_redundant_gene_input(pathway)
 
     def load_pathway2genes(self):
         """
         Loads the gene to pathway edges from the gmt file. Produces a dataframe with the pathway code and the single
-        HUGO gene IDs as columns. Contains an entry for every relation in the Reactome dataset.
+        HUGO gene IDs as columns. Contains an entry for every relation in the Reactome dataset. Adding a residual node
+        for genes in the dataset which have no connection to Reactome.
         :return: DataFrame with columns ['pathway', 'gene'] with binary relations between pathways and genes
         """
         filename = '../data/reactome/ReactomePathways.gmt'
@@ -38,7 +43,13 @@ class ReactomeNetwork:
                     if gene in self.gene_list:
                         pathway2genes_list.append({'pathway': pathway, 'gene': gene})
         pathway2genes = pd.DataFrame(pathway2genes_list)
-        return pathway2genes
+
+        # connect unused genes to a residual node in the last layer
+        unused_genes = list(set(self.gene_list).difference(set(pathway2genes['gene'].unique())))
+        unused_genes_df = pd.DataFrame(columns=['pathway', 'gene'])
+        unused_genes_df['gene'] = unused_genes
+        unused_genes_df['pathway'] = 'residual'
+        return pd.concat([pathway2genes, unused_genes_df])
 
     @staticmethod
     def load_pathway_encoding(species="HSA"):
@@ -51,6 +62,7 @@ class ReactomeNetwork:
         df = pd.read_csv(filename, sep="\t")
         df.columns = ["ID", "pathway", "species"]
         df = df[df["ID"].str.contains(species)]
+        df.loc[len(df)] = ['residual', 'residual', 'Homo sapiens']      # Adding residual node for completion
         return df
 
     @staticmethod
@@ -70,7 +82,8 @@ class ReactomeNetwork:
     def generate_graph(self):
         """
         Generates networkX graph from hierarchy edge list. Connecting all highest order pathways to a root node. The
-        root node is equivalent to the prediction head.
+        root node is equivalent to the prediction head. Adding a connection of the residual (unconnected genes) to the
+        root node.
         :return: networkX graph of reactome network
         """
         highest_level_pathways = self.hierarchy[~self.hierarchy['source'].isin(self.hierarchy['target']
@@ -79,6 +92,8 @@ class ReactomeNetwork:
         G.add_node('root')
         for pathway in highest_level_pathways:
             G.add_edge('root', pathway)
+        G.add_node('residual')
+        G.add_edge('root', 'residual')
         return G
 
     def get_nodes_at_level(self, level):
@@ -92,6 +107,40 @@ class ReactomeNetwork:
         if level >= 1.:         # remove nodes that are not **at** the specified distance but closer
             nodes -= set(nx.ego_graph(self.graph, 'root', radius=level - 1))
         return list(nodes)
+
+    def get_pathway_level(self, pathway):
+        """
+        :param pathway: str; code of the pathway
+        :return: int; level of the pathway in the network layers
+        """
+        for i, layer in enumerate(self.gene_layers):
+            if pathway in layer.columns:
+                return i
+        raise KeyError("Pathway {} not found".format(pathway))
+
+    def get_children_gene_inputs(self, level, pathway):
+        """
+        Generates a list of genes that flow as input into all children of the pathway.
+        :param level: int; pathway level in the network
+        :param pathway: str; name of the pathway
+        :return: List(str); all genes flowing into children pathways
+        """
+        p_adjacency = self.pathway_layers[level - 1]
+        g_adjacency = self.gene_layers[level - 1]
+        children = list(p_adjacency[p_adjacency[pathway] == 1].index)
+        return list(g_adjacency[g_adjacency[children].sum(axis=1) > 0].index)
+
+    def clean_redundant_gene_input(self, pathway):
+        """
+        Hierarchical structure of reactome connects all children gene inputs to parent node as well. We want these gene
+        connections only to flow through the respective pathways. Therefore, we need to remove all gene connections
+        which are connected to children of a pathway.
+        :param pathway: str; name of the pathway
+        :return: void; setting the respective gene_layer connections to 0
+        """
+        level = self.get_pathway_level(pathway)
+        children_genes = self.get_children_gene_inputs(level, pathway)
+        self.gene_layers[level][pathway][children_genes] = 0
 
     def get_nodes_at_levels(self):
         """
@@ -121,6 +170,7 @@ class ReactomeNetwork:
         for each level is generated. Additionally, an adjacency matrix for genes to each layer is generated. This second
         adjacency matrix connects genes directly to higher level pathways.
         :param trim: int; number of minimum inflows to a node to keep the node in the network.
+        :param depth: int: number of pathway levels to be considered for the network.
         :return: (list(pd.DataFrame), list(pd.DataFrame)); a list of adjacency matrices per layer and a list of
             gene-to-pathway adjacency matrix per layer.
         """
@@ -152,14 +202,18 @@ class ReactomeNetwork:
 
     def get_masks(self, nbr_genetic_input_types):
         """
-        Transforms pd.DataFrame adjacency matrices into binary np.array masks. Multiplying masks for gene level
-         connections based on the number of genetic inputs.
+        Transforms pd.DataFrame adjacency matrices into binary np.array masks. Input layer connections based on the
+         number of genetic inputs.
         :param nbr_genetic_input_types: int; number of genetic input modalities provided
-        :return: (list(np.array), list(np.array)); a list of adjacency matrices per layer and a list of
-            gene-to-pathway adjacency matrix per layer.
+        :return: (list(np.array), list(np.array), np.array); a list of adjacency matrices per layer and a list of
+            gene-to-pathway adjacency matrix per layer. The input mask to connect the same gene from different
+             modalities to the input node
         """
-        gene_masks = [np.concatenate(nbr_genetic_input_types*[l.values]) for l in self.gene_layers]
+        input_mask = pd.DataFrame(index=nbr_genetic_input_types*self.gene_list, columns=self.gene_list).fillna(0)
+        for col in input_mask.columns:
+            input_mask[col].loc[col] = 1
+        gene_masks = [l.values for l in self.gene_layers]
         pathway_masks = [l.values for l in self.pathway_layers]
-        return gene_masks, pathway_masks
+        return gene_masks, pathway_masks, input_mask.values
 
 
