@@ -135,8 +135,8 @@ def generate_train_test(genetic_data, target, gene_set=None, additional_data=Non
 
 
 def to_dataloader(train_dataset, test_dataset, batch_size):
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=2,
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=8,
                               persistent_workers=True, pin_memory=True,)
-    val_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True, num_workers=2,
+    val_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True, num_workers=8,
                             persistent_workers=True, pin_memory=True,)
     return train_loader, val_loader
