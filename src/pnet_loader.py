@@ -32,22 +32,24 @@ class PnetDataset(Dataset):
         self.altered_inputs = []
         self.inds = indicies
         if additional_data:
-            self.additional_data = additional_data
+            self.additional_data = additional_data.loc[self.inds]
         else:
             self.additional_data = pd.DataFrame(index=self.inds)    # create empty dummy dataframe if no additional data
         self.target = self.target.loc[self.inds]
         self.genes = self.get_genes()
         self.input_df = self.unpack_input()
-
         assert self.input_df.index.equals(self.target.index)
+        self.x = torch.tensor(self.input_df.values, dtype=torch.float)
+        self.y = torch.tensor(self.target.values, dtype=torch.float)
+        self.additional = torch.tensor(self.additional_data.values, dtype=torch.float)
 
     def __len__(self):
         return self.input_df.shape[0]
 
     def __getitem__(self, index):
-        x = torch.tensor(self.input_df.iloc[index], dtype=torch.float)
-        y = torch.tensor(self.target.iloc[index], dtype=torch.float)
-        additional = torch.tensor(self.additional_data.iloc[index], dtype=torch.float)
+        x = self.x[index]
+        y = self.y[index]
+        additional = self.additional[index]
         return x, additional, y
 
     def get_genes(self):
@@ -135,8 +137,6 @@ def generate_train_test(genetic_data, target, gene_set=None, additional_data=Non
 
 
 def to_dataloader(train_dataset, test_dataset, batch_size):
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=8,
-                              persistent_workers=True, pin_memory=True,)
-    val_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True, num_workers=8,
-                            persistent_workers=True, pin_memory=True,)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4,)
+    val_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=4,)
     return train_loader, val_loader
