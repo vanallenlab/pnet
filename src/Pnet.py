@@ -1,4 +1,5 @@
 import pandas as pd
+import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -51,10 +52,11 @@ class PNET_NN(pl.LightningModule):
 #         parser.add_argument('--dropout', type=float, default=0.2)
 #         return parser
 
-    def __init__(self, reactome_network, nbr_gene_inputs=1, additional_dims=0, lr=1e-3, weight_decay=1e-5, dropout=0.2):
+    def __init__(self, reactome_network, nbr_gene_inputs=1, output_dim=1, additional_dims=0, lr=1e-3, weight_decay=1e-5, dropout=0.2):
         super().__init__()
         self.reactome_network = reactome_network
         self.nbr_gene_inputs = nbr_gene_inputs
+        self.output_dim = output_dim
         self.additional_dims =additional_dims
         self.lr = lr
         self.weight_decay = weight_decay
@@ -74,14 +76,14 @@ class PNET_NN(pl.LightningModule):
             self.layers.append(PNET_Block(gene_masks[i + 1], pathway_masks[i], self.dropout))
             self.preds.append(
                 nn.Sequential(*[nn.Linear(in_features=pathway_masks[i].shape[0] + self.additional_dims,
-                                          out_features=1),
+                                          out_features=self.output_dim),
                                 nn.Sigmoid()]))
         # Add final prediction layer:
         self.preds.append(nn.Sequential(*[nn.Linear(in_features=pathway_masks[len(gene_masks) - 2].shape[0] +
-                                                                self.additional_dims, out_features=1),
+                                                                self.additional_dims, out_features=self.output_dim),
                                           nn.ReLU()]))
         # Weighting of the different prediction layers:
-        self.attn = nn.Linear(in_features=len(gene_masks) - 1, out_features=1)
+        self.attn = nn.Linear(in_features=(len(gene_masks) - 1) * self.output_dim, out_features=self.output_dim)
 
     def forward(self, x, additional_data):
         x = self.input_layer(x)
@@ -122,9 +124,10 @@ class PNET_NN(pl.LightningModule):
         return torch.optim.Adam(self.parameters(), lr=self.lr)
 
 
-    def deepLIFT(self, test_dataset):
+    def deepLIFT(self, test_dataset, target_class=0):
         dl = captum.attr.DeepLift(self)
-        gene_importances, additional_importances = dl.attribute((test_dataset.x, test_dataset.additional))
+        gene_importances, additional_importances = dl.attribute((test_dataset.x, test_dataset.additional)
+                                                                , target=target_class)
         gene_importances = pd.DataFrame(gene_importances.detach().numpy(),
                                         index=test_dataset.input_df.index,
                                         columns=test_dataset.input_df.columns)
@@ -134,9 +137,10 @@ class PNET_NN(pl.LightningModule):
         self.gene_importances, self.additional_importances = gene_importances, additional_importances
         return self.gene_importances, self.additional_importances
     
-    def integrated_gradients(self, test_dataset):
+    def integrated_gradients(self, test_dataset, target_class=0):
         ig = captum.attr.IntegratedGradients(self)
-        ig_attr, delta = ig.attribute((test_dataset.x, test_dataset.additional), return_convergence_delta=True)
+        ig_attr, delta = ig.attribute((test_dataset.x, test_dataset.additional), return_convergence_delta=True
+                                      , target=target_class)
         gene_importances, additional_importances = ig_attr
         gene_importances = pd.DataFrame(gene_importances.detach().numpy(),
                                         index=test_dataset.input_df.index,
@@ -147,11 +151,11 @@ class PNET_NN(pl.LightningModule):
         self.gene_importances, self.additional_importances = gene_importances, additional_importances
         return self.gene_importances, self.additional_importances
 
-    def layerwise_importance(self, test_dataset):
+    def layerwise_importance(self, test_dataset, target_class=0):
         layer_importance_scores = []
         for i, level in enumerate(self.layers):
             cond = captum.attr.LayerConductance(self, level.activation)  # ReLU output of masked layer at each level
-            cond_vals = cond.attribute((test_dataset.x, test_dataset.additional))
+            cond_vals = cond.attribute((test_dataset.x, test_dataset.additional), target=target_class)
             cols = [self.reactome_network.pathway_encoding.set_index('ID').loc[col]['pathway'] for col in self.reactome_network.pathway_layers[i].columns]
             cond_vals_genomic = pd.DataFrame(cond_vals.detach().numpy(),
                                              columns=cols,
@@ -160,9 +164,9 @@ class PNET_NN(pl.LightningModule):
             layer_importance_scores.append(pathway_imp_by_target)
         return layer_importance_scores
     
-    def gene_importance(self, test_dataset):
+    def gene_importance(self, test_dataset, target_class=0):
         cond = captum.attr.LayerConductance(self, self.input_layer)
-        cond_vals = cond.attribute((test_dataset.x, test_dataset.additional))
+        cond_vals = cond.attribute((test_dataset.x, test_dataset.additional), target=target_class)
         cols = self.reactome_network.gene_list
         cond_vals_genomic = pd.DataFrame(cond_vals.detach().numpy(),
                                          columns=cols,
@@ -185,16 +189,21 @@ class PNET_NN(pl.LightningModule):
 
 
 def fit(model, dataloader, optimizer):
-    pred_loss = nn.BCELoss(reduction='sum')
+    pred_loss = nn.BCEWithLogitsLoss(reduction='sum')
+    if torch.backends.mps.is_available():
+        device = torch.device('mps')
+    else:
+        device = torch.device('cpu')
     model.train()
     running_loss = 0.0
     running_acc = 0.0
     for batch in dataloader:
         gene_data, additional_data, y = batch
+        gene_data, additional_data, y = gene_data.to(device), additional_data.to(device), y.to(device)
         optimizer.zero_grad()
         y_hat = model(gene_data, additional_data)
         loss = pred_loss(torch.squeeze(y_hat), torch.squeeze(y))
-        acc = np.sum(y_hat.round().detach().numpy().squeeze() == y.detach().numpy().squeeze())
+        acc = torch.sum(y_hat.round().detach() == y.detach())
         running_loss += loss.item()
         running_acc += acc
         loss.backward()
@@ -205,15 +214,20 @@ def fit(model, dataloader, optimizer):
 
 
 def validate(model, dataloader):
-    pred_loss = nn.BCELoss(reduction='sum')
+    pred_loss = nn.BCEWithLogitsLoss(reduction='sum')
+    if torch.backends.mps.is_available():
+        device = torch.device('mps')
+    else:
+        device = torch.device('cpu')
     model.eval()
     running_loss = 0.0
     running_acc = 0.0
     for batch in dataloader:
         gene_data, additional_data, y = batch
+        gene_data, additional_data, y = gene_data.to(device), additional_data.to(device), y.to(device)
         y_hat = model(gene_data, additional_data)
         loss = pred_loss(torch.squeeze(y_hat), torch.squeeze(y))
-        acc = np.sum(y_hat.round().detach().numpy().squeeze() == y.detach().numpy().squeeze())
+        acc = torch.sum(y_hat.round().detach() == y.detach())
         running_loss += loss.item()
         running_acc += acc
         loss.backward()
@@ -224,6 +238,11 @@ def validate(model, dataloader):
 
 def train(model, train_loader, test_loader, lr=0.5e-3, weight_decay=1e-4, epochs=300, verbose=False,
           early_stopping=True):
+    if torch.backends.mps.is_available():
+        device = torch.device('mps')
+    else:
+        device = torch.device('cpu')
+    model = model.to(device)
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     early_stopper = util.EarlyStopper(patience=5, min_delta=0.01, verbose=verbose)
     train_scores = {'loss':[], 'acc':[]}
@@ -249,9 +268,8 @@ def run(genetic_data, target, gene_set=None, additional_data=None, test_split=0.
     train_dataset, test_dataset = pnet_loader.generate_train_test(genetic_data, target, gene_set, additional_data,
                                                                   test_split, seed)
     reactome_network = ReactomeNetwork.ReactomeNetwork(train_dataset.get_genes())
-    model = PNET_NN(hparams=
-                    {'reactome_network':reactome_network, 'nbr_gene_inputs':len(genetic_data), 'dropout':dropout,
-                      'additional_dims':train_dataset.additional_data.shape[1], 'lr':lr, 'weight_decay':weight_decay}
+    model = PNET_NN(reactome_network=reactome_network, nbr_gene_inputs=len(genetic_data), dropout=dropout,
+                    additional_dims=train_dataset.additional_data.shape[1], lr=lr, weight_decay=weight_decay
                     )
     train_loader, test_loader = pnet_loader.to_dataloader(train_dataset, test_dataset, batch_size)
     model, train_scores, test_scores = train(model, train_loader, test_loader, lr, weight_decay, epochs, verbose,
