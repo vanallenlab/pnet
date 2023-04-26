@@ -102,7 +102,7 @@ class PNET_NN(pl.LightningModule):
     def step(self, who, batch, batch_nb):
         x, additional, y = batch
         pred_y = self(x, additional)
-        loss = F.binary_cross_entropy_with_logits(pred_y, y, reduction='mean')
+        loss = F.cross_entropy(pred_y, y, reduction='mean')
 
         self.log(who + '_bce_loss', loss)
         return loss
@@ -186,90 +186,92 @@ class PNET_NN(pl.LightningModule):
             plt.savefig(plot+'/imp_genes.pdf')
 
 
-
-
 def fit(model, dataloader, optimizer):
-    pred_loss = nn.BCEWithLogitsLoss(reduction='sum')
+    if model.output_dim == 1:
+        pred_loss = nn.BCEWithLogitsLoss(reduction='sum')
+    else:
+        pred_loss = nn.CrossEntropyLoss(reduction='sum')
     if torch.backends.mps.is_available():
         device = torch.device('mps')
+    elif torch.cuda.is_available():
+        device = torch.device('cuda')
     else:
         device = torch.device('cpu')
     model.train()
     running_loss = 0.0
-    running_acc = 0.0
     for batch in dataloader:
         gene_data, additional_data, y = batch
         gene_data, additional_data, y = gene_data.to(device), additional_data.to(device), y.to(device)
         optimizer.zero_grad()
         y_hat = model(gene_data, additional_data)
-        loss = pred_loss(torch.squeeze(y_hat), torch.squeeze(y))
-        acc = torch.sum(y_hat.round().detach() == y.detach())
+        loss = pred_loss(y_hat, y)
         running_loss += loss.item()
-        running_acc += acc
         loss.backward()
         optimizer.step()
     train_loss = running_loss/len(dataloader.dataset)
-    train_acc = running_acc/len(dataloader.dataset)
-    return train_loss, train_acc
+    return train_loss
 
 
 def validate(model, dataloader):
-    pred_loss = nn.BCEWithLogitsLoss(reduction='sum')
+    if model.output_dim == 1:
+        pred_loss = nn.BCEWithLogitsLoss(reduction='sum')
+    else:
+        pred_loss = nn.CrossEntropyLoss(reduction='sum')
     if torch.backends.mps.is_available():
         device = torch.device('mps')
+    elif torch.cuda.is_available():
+        device = torch.device('cuda')
     else:
         device = torch.device('cpu')
     model.eval()
     running_loss = 0.0
-    running_acc = 0.0
     for batch in dataloader:
         gene_data, additional_data, y = batch
         gene_data, additional_data, y = gene_data.to(device), additional_data.to(device), y.to(device)
         y_hat = model(gene_data, additional_data)
         loss = pred_loss(torch.squeeze(y_hat), torch.squeeze(y))
-        acc = torch.sum(y_hat.round().detach() == y.detach())
         running_loss += loss.item()
-        running_acc += acc
         loss.backward()
     loss = running_loss / len(dataloader.dataset)
-    acc = running_acc/len(dataloader.dataset)
-    return loss, acc
+    return loss
 
 
-def train(model, train_loader, test_loader, lr=0.5e-3, weight_decay=1e-4, epochs=300, verbose=False,
+def train(model, train_loader, test_loader, lr=0.5e-3, weight_decay=1e-4, epochs=10, verbose=False,
           early_stopping=True):
     if torch.backends.mps.is_available():
         device = torch.device('mps')
+    elif torch.cuda.is_available():
+        device = torch.device('cuda')
     else:
         device = torch.device('cpu')
     model = model.to(device)
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     early_stopper = util.EarlyStopper(patience=5, min_delta=0.01, verbose=verbose)
-    train_scores = {'loss':[], 'acc':[]}
-    test_scores = {'loss':[], 'acc':[]}
+    train_scores = []
+    test_scores = []
     for epoch in range(epochs):
-        train_epoch_scores = fit(model, train_loader, optimizer)
-        test_epoch_scores = validate(model, test_loader)
-        for i, k in enumerate(train_scores):
-            train_scores[k].append(train_epoch_scores[i])
-            test_scores[k].append(test_epoch_scores[i])
+        train_epoch_loss = fit(model, train_loader, optimizer)
+        test_epoch_loss = validate(model, test_loader)
+        train_scores.append(train_epoch_loss)
+        test_scores.append(test_epoch_loss)
         if verbose:
             print(f"Epoch {epoch + 1} of {epochs}")
-            print("Train scores: {}".format(train_epoch_scores))
-            print("Test scores: {}".format(test_epoch_scores))
-        if early_stopper.early_stop(test_epoch_scores[0]) and early_stopping:
+            print("Train Loss: {}".format(train_epoch_loss))
+            print("Test Loss: {}".format(test_epoch_loss))
+        if early_stopper.early_stop(test_epoch_loss) and early_stopping:
             print('Hit early stopping criteria')
             break
     return model, train_scores, test_scores
 
 
 def run(genetic_data, target, gene_set=None, additional_data=None, test_split=0.3, seed=None, dropout=0.3,
-        lr=1e-3, weight_decay=1, batch_size=64, epochs=300, verbose=False, early_stopping=True):
+        lr=1e-3, weight_decay=1, batch_size=64, epochs=10, verbose=False, early_stopping=True):
     train_dataset, test_dataset = pnet_loader.generate_train_test(genetic_data, target, gene_set, additional_data,
                                                                   test_split, seed)
     reactome_network = ReactomeNetwork.ReactomeNetwork(train_dataset.get_genes())
     model = PNET_NN(reactome_network=reactome_network, nbr_gene_inputs=len(genetic_data), dropout=dropout,
-                    additional_dims=train_dataset.additional_data.shape[1], lr=lr, weight_decay=weight_decay
+                    additional_dims=train_dataset.additional_data.shape[1], lr=lr, weight_decay=weight_decay,
+                    output_dim=target.shape[1]
                     )
     train_loader, test_loader = pnet_loader.to_dataloader(train_dataset, test_dataset, batch_size)
     model, train_scores, test_scores = train(model, train_loader, test_loader, lr, weight_decay, epochs, verbose,
