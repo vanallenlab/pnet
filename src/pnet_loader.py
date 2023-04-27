@@ -100,7 +100,8 @@ def get_indicies(genetic_data, target, additional_data=None):
     return inds
 
 
-def generate_train_test(genetic_data, target, gene_set=None, additional_data=None, test_split=0.3, seed=None):
+def generate_train_test(genetic_data, target, gene_set=None, additional_data=None, test_split=0.3, seed=None,
+                        train_inds=None, test_inds=None):
     """
     Takes all data modalities to be used and generates a train and test DataSet with a given split.
     :param genetic_data: Dict(str: pd.DataFrame); requires a dict containing a pd.DataFrame for each data modality
@@ -118,8 +119,18 @@ def generate_train_test(genetic_data, target, gene_set=None, additional_data=Non
     inds = get_indicies(genetic_data, target)
     random.seed(seed)
     random.shuffle(inds)
-    train_inds = inds[:int((len(inds) + 1) * (1 - test_split))]
-    test_inds = inds[int((len(inds) + 1) * (1 - test_split)):]
+    if train_inds and test_inds:
+        train_inds = list(set(inds).intersection(train_inds))
+        test_inds = list(set(inds).intersection(test_inds))
+    elif train_inds:
+        train_inds = list(set(inds).intersection(train_inds))
+        test_inds = [i for i in inds if i not in train_inds]
+    elif test_inds:
+        test_inds = list(set(inds).intersection(test_inds))
+        train_inds = [i for i in inds if i not in test_inds]
+    else:
+        test_inds = inds[int((len(inds) + 1) * (1 - test_split)):]
+        train_inds = inds[:int((len(inds) + 1) * (1 - test_split))]
     print('Initializing Train Dataset')
     train_dataset = PnetDataset(genetic_data, target, train_inds, additional_data=additional_data, gene_set=gene_set)
     print('Initializing Test Dataset')

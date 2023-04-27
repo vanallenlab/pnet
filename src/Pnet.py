@@ -265,9 +265,10 @@ def train(model, train_loader, test_loader, lr=0.5e-3, weight_decay=1e-4, epochs
 
 
 def run(genetic_data, target, gene_set=None, additional_data=None, test_split=0.3, seed=None, dropout=0.3,
-        lr=1e-3, weight_decay=1, batch_size=64, epochs=10, verbose=False, early_stopping=True):
+        lr=1e-3, weight_decay=1, batch_size=64, epochs=10, verbose=False, early_stopping=True, train_inds=None,
+        test_inds=None):
     train_dataset, test_dataset = pnet_loader.generate_train_test(genetic_data, target, gene_set, additional_data,
-                                                                  test_split, seed)
+                                                                  test_split, seed, train_inds, test_inds)
     reactome_network = ReactomeNetwork.ReactomeNetwork(train_dataset.get_genes())
     model = PNET_NN(reactome_network=reactome_network, nbr_gene_inputs=len(genetic_data), dropout=dropout,
                     additional_dims=train_dataset.additional_data.shape[1], lr=lr, weight_decay=weight_decay,
