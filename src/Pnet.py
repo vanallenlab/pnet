@@ -29,7 +29,7 @@ class PNET_Block(nn.Module):
         self.gene_layer = nn.Sequential(*masked_activation(gene_mask))
         self.pathway_layer = nn.Sequential(*masked_activation(pathway_mask))
         self.batchnorm = nn.BatchNorm1d(gene_mask.shape[1])
-        self.activation = nn.ReLU()
+        self.activation = nn.Tanh()
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, genes):
@@ -52,7 +52,7 @@ class PNET_NN(pl.LightningModule):
 #         parser.add_argument('--dropout', type=float, default=0.2)
 #         return parser
 
-    def __init__(self, reactome_network, nbr_gene_inputs=1, output_dim=1, additional_dims=0, lr=1e-3, weight_decay=1e-5, dropout=0.2):
+    def __init__(self, reactome_network, nbr_gene_inputs=1, output_dim=1, additional_dims=0, lr=1e-3, weight_decay=1e-5, dropout=0.2, random_network=False, fcnn=False):
         super().__init__()
         self.reactome_network = reactome_network
         self.nbr_gene_inputs = nbr_gene_inputs
@@ -63,13 +63,23 @@ class PNET_NN(pl.LightningModule):
         self.dropout = dropout
         # Fetch connection masks from reactome network:
         gene_masks, pathway_masks, input_mask = self.reactome_network.get_masks(self.nbr_gene_inputs)
+        if random_network:
+            for gm in gene_masks:
+                util.shuffle_connections(gm)
+            for pm in pathway_masks:
+                util.shuffle_connections(pm)
+                
+        if fcnn:
+            gene_masks = [np.ones_like(gm) for gm in gene_masks]
+            pathway_masks = [np.ones_like(gm) for gm in pathway_masks]
+                
         # Prepare list of layers and list of predictions per layer:
         self.layers = nn.ModuleList()
         self.preds = nn.ModuleList()
         # Add input layer to aggregate all data modalities
-        self.input_layer = nn.Sequential(*masked_activation(input_mask, activation='relu'))
+        self.input_layer = nn.Sequential(*masked_activation(input_mask, activation='tanh'))
         # Add first layer separately:
-        self.first_gene_layer = nn.Sequential(*masked_activation(gene_masks[0], activation='relu'))
+        self.first_gene_layer = nn.Sequential(*masked_activation(gene_masks[0], activation='tanh'))
         self.drop1 = nn.Dropout(self.dropout)
         # Add blocks and prediction heads for each pathway level:
         for i in range(0, len(gene_masks) - 2):
@@ -81,7 +91,7 @@ class PNET_NN(pl.LightningModule):
         # Add final prediction layer:
         self.preds.append(nn.Sequential(*[nn.Linear(in_features=pathway_masks[len(gene_masks) - 2].shape[0] +
                                                                 self.additional_dims, out_features=self.output_dim),
-                                          nn.ReLU()]))
+                                          nn.Sigmoid()]))
         # Weighting of the different prediction layers:
         self.attn = nn.Linear(in_features=(len(gene_masks) - 1) * self.output_dim, out_features=self.output_dim)
 
@@ -89,7 +99,7 @@ class PNET_NN(pl.LightningModule):
         x = self.input_layer(x)
         genes = torch.clone(x)
         y_hats = []
-        x = self.drop1(F.relu(self.first_gene_layer(x)))
+        x = self.drop1(self.first_gene_layer(x))
         x_cat = torch.concat([x, additional_data], dim=1)
         y_hats.append(self.preds[0](x_cat))
         for layer, pred in zip(self.layers, self.preds[1:]):
@@ -160,7 +170,7 @@ class PNET_NN(pl.LightningModule):
             cond_vals_genomic = pd.DataFrame(cond_vals.detach().numpy(),
                                              columns=cols,
                                              index=test_dataset.input_df.index)
-            pathway_imp_by_target = cond_vals_genomic.sum().T
+            pathway_imp_by_target = cond_vals_genomic
             layer_importance_scores.append(pathway_imp_by_target)
         return layer_importance_scores
     
@@ -171,7 +181,7 @@ class PNET_NN(pl.LightningModule):
         cond_vals_genomic = pd.DataFrame(cond_vals.detach().numpy(),
                                          columns=cols,
                                          index=test_dataset.input_df.index)
-        gene_imp_by_target = cond_vals_genomic.sum().T
+        gene_imp_by_target = cond_vals_genomic
         return gene_imp_by_target
 
     def interpret(self, test_dataset, plot=False):
@@ -184,6 +194,8 @@ class PNET_NN(pl.LightningModule):
             plt.rcParams["figure.figsize"] = (6,8)
             gene_importances[list(gene_order[-20:])].plot(kind='box', vert=False)
             plt.savefig(plot+'/imp_genes.pdf')
+            
+        return gene_feature_importances, additional_feature_importances, gene_importances, layer_importance_scores
 
 
 def fit(model, dataloader, optimizer):
@@ -191,10 +203,10 @@ def fit(model, dataloader, optimizer):
         pred_loss = nn.BCEWithLogitsLoss(reduction='sum')
     else:
         pred_loss = nn.CrossEntropyLoss(reduction='sum')
-    if torch.backends.mps.is_available():
-        device = torch.device('mps')
-    elif torch.cuda.is_available():
+    if torch.cuda.is_available():
         device = torch.device('cuda')
+    elif torch.backends.mps.is_available():
+        device = torch.device('mps')
     else:
         device = torch.device('cpu')
     model.train()
@@ -217,10 +229,10 @@ def validate(model, dataloader):
         pred_loss = nn.BCEWithLogitsLoss(reduction='sum')
     else:
         pred_loss = nn.CrossEntropyLoss(reduction='sum')
-    if torch.backends.mps.is_available():
-        device = torch.device('mps')
-    elif torch.cuda.is_available():
+    if torch.cuda.is_available():
         device = torch.device('cuda')
+    elif torch.backends.mps.is_available():
+        device = torch.device('mps')
     else:
         device = torch.device('cpu')
     model.eval()
@@ -236,12 +248,13 @@ def validate(model, dataloader):
     return loss
 
 
-def train(model, train_loader, test_loader, lr=0.5e-3, weight_decay=1e-4, epochs=10, verbose=False,
+def train(model, train_loader, test_loader, lr=0.5e-3, weight_decay=1e-4, epochs=300, verbose=False,
           early_stopping=True):
-    if torch.backends.mps.is_available():
-        device = torch.device('mps')
-    elif torch.cuda.is_available():
+    if torch.cuda.is_available():
         device = torch.device('cuda')
+        print('We are sending to cuda')
+    elif torch.backends.mps.is_available():
+        device = torch.device('mps')
     else:
         device = torch.device('cpu')
     model = model.to(device)
@@ -264,15 +277,36 @@ def train(model, train_loader, test_loader, lr=0.5e-3, weight_decay=1e-4, epochs
     return model, train_scores, test_scores
 
 
-def run(genetic_data, target, gene_set=None, additional_data=None, test_split=0.3, seed=None, dropout=0.3,
-        lr=1e-3, weight_decay=1, batch_size=64, epochs=10, verbose=False, early_stopping=True, train_inds=None,
-        test_inds=None):
+def evaluate_interpret_save(model, test_dataset, path):
+    if not os.path.exists(path):
+        os.makedirs(path)
+    x_test = test_dataset.x
+    additional_test = test_dataset.additional
+    y_test = test_dataset.y
+    model.to('cpu')
+    pred = model(x_test, additional_test)
+    auc = util.get_auc(pred, y_test, save=path+'/auc_curve.pdf')
+    
+    torch.save(pred, path+'/predictions.pt')
+    torch.save(auc, path+'/AUC.pt')
+    gene_feature_importances, additional_feature_importances, gene_importances, layer_importance_scores = model.interpret(test_dataset)
+    gene_feature_importances.to_csv(path+'/gene_feature_importances.csv')
+    additional_feature_importances.to_csv(path+'/additional_feature_importances.csv')
+    gene_importances.to_csv(path+'/gene_importances.csv')
+    for i, layer in enumerate(layer_importance_scores):
+        layer.to_csv(path+'/layer_{}_importances.csv'.format(i))
+
+
+
+def run(genetic_data, target, gene_set=None, additional_data=None, test_split=0.2, seed=None, dropout=0.3,
+        lr=1e-3, weight_decay=1, batch_size=64, epochs=300, verbose=False, early_stopping=True, train_inds=None,
+        test_inds=None, random_network=False, fcnn=False):
     train_dataset, test_dataset = pnet_loader.generate_train_test(genetic_data, target, gene_set, additional_data,
                                                                   test_split, seed, train_inds, test_inds)
     reactome_network = ReactomeNetwork.ReactomeNetwork(train_dataset.get_genes())
     model = PNET_NN(reactome_network=reactome_network, nbr_gene_inputs=len(genetic_data), dropout=dropout,
                     additional_dims=train_dataset.additional_data.shape[1], lr=lr, weight_decay=weight_decay,
-                    output_dim=target.shape[1]
+                    output_dim=target.shape[1], random_network=random_network, fcnn=fcnn
                     )
     train_loader, test_loader = pnet_loader.to_dataloader(train_dataset, test_dataset, batch_size)
     model, train_scores, test_scores = train(model, train_loader, test_loader, lr, weight_decay, epochs, verbose,

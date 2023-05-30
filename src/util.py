@@ -70,7 +70,7 @@ def select_highly_variable_genes(df, bins=10, genes_per_bin=100):
     return bin_assignment.join(gene_std).groupby('bin')['std'].nlargest(genes_per_bin).reset_index()
 
 
-def draw_auc(fpr, tpr, auc, draw):
+def draw_auc(fpr, tpr, auc, draw, save=False):
     if isinstance(fpr, list):
         fpr, tpr = fpr[draw], tpr[draw]
     plt.plot(fpr, tpr, color="darkorange", label="ROC curve (area = %0.2f)" % auc)
@@ -78,10 +78,13 @@ def draw_auc(fpr, tpr, auc, draw):
     plt.xlabel('False Positive Rate')
     plt.plot([0, 1], [0, 1], color="navy", linestyle="--")
     plt.legend(loc="lower right")
-    plt.show()
+    if save:
+        plt.savefig(save)
+    else:
+        plt.show()
 
 
-def get_auc(pred, target, draw=0):
+def get_auc(pred, target, draw=0, save=False):
     if len(target.shape) > 1 and target.shape[1] > 1:
         collapsed_target = target.argmax(axis=1)
     else:
@@ -98,7 +101,7 @@ def get_auc(pred, target, draw=0):
         roc = torchmetrics.ROC(task='binary')
     auc = auroc(pred, collapsed_target)
     fpr, tpr, tresholds = roc(pred, collapsed_target)
-    draw_auc(fpr, tpr, auc, draw)
+    draw_auc(fpr, tpr, auc, draw, save=save)
     return auc
 
 
@@ -111,6 +114,12 @@ def select_non_constant_genes(df, cutoff=0.05):
     :return: list(str); list of genes that are not constant in dataframe
     """
     return list(df.loc[:, df.nunique()/df.count() > 0.05].columns)
+
+
+def shuffle_connections(mask):
+    for i in range(mask.shape[0]):
+        np.random.shuffle(mask[i,:])
+    return mask
 
 
 class EarlyStopper:
