@@ -31,7 +31,7 @@ class PnetDataset(Dataset):
         self.gene_set = gene_set
         self.altered_inputs = []
         self.inds = indicies
-        if additional_data:
+        if additional_data is not None:
             self.additional_data = additional_data.loc[self.inds]
         else:
             self.additional_data = pd.DataFrame(index=self.inds)    # create empty dummy dataframe if no additional data
@@ -78,6 +78,10 @@ class PnetDataset(Dataset):
             input_df = input_df.join(self.genetic_data[inp][self.genes], how='inner', rsuffix='_' + inp)
         print('generated input DataFrame of size {}'.format(input_df.shape))
         return input_df.loc[self.inds]
+    
+    def save_indicies(self, path):
+        df = pd.DataFrame(data={"indicies": self.inds})
+        df.to_csv(path, sep=',',index=False)
 
 
 def get_indicies(genetic_data, target, additional_data=None):
@@ -93,15 +97,15 @@ def get_indicies(genetic_data, target, additional_data=None):
     """
     ind_sets = [set(genetic_data[inp].index.drop_duplicates(keep=False)) for inp in genetic_data]
     ind_sets.append(target.index.drop_duplicates(keep=False))
-    if additional_data:
-        ind_sets.append(additional_data.index.drop_dublicates(keep=False))
+    if additional_data is not None:
+        ind_sets.append(additional_data.index.drop_duplicates(keep=False))
     inds = list(set.intersection(*ind_sets))
     print('Found {} overlapping indicies'.format(len(inds)))
     return inds
 
 
 def generate_train_test(genetic_data, target, gene_set=None, additional_data=None, test_split=0.3, seed=None,
-                        train_inds=None, test_inds=None):
+                        train_inds=None, test_inds=None, collinear_features=0):
     """
     Takes all data modalities to be used and generates a train and test DataSet with a given split.
     :param genetic_data: Dict(str: pd.DataFrame); requires a dict containing a pd.DataFrame for each data modality
@@ -116,7 +120,7 @@ def generate_train_test(genetic_data, target, gene_set=None, additional_data=Non
     :return:
     """
     print('Given {} Input modalities'.format(len(genetic_data)))
-    inds = get_indicies(genetic_data, target)
+    inds = get_indicies(genetic_data, target, additional_data)
     random.seed(seed)
     random.shuffle(inds)
     if train_inds and test_inds:
@@ -135,15 +139,9 @@ def generate_train_test(genetic_data, target, gene_set=None, additional_data=Non
     train_dataset = PnetDataset(genetic_data, target, train_inds, additional_data=additional_data, gene_set=gene_set)
     print('Initializing Test Dataset')
     test_dataset = PnetDataset(genetic_data, target, test_inds, additional_data=additional_data, gene_set=gene_set)
-    # couple lines to add some genes with a signal perfectly correlated with the target
-    # for n in range(2):
-    #     r = random.randint(0, len(train_dataset.input_df.columns))
-    #     altered_input_col = train_dataset.input_df.columns[r]
-    #     train_dataset.altered_inputs.append(altered_input_col)
-    #     test_dataset.altered_inputs.append(altered_input_col)
-    #     print('set {} in input to target variable'.format(altered_input_col))
-    #     train_dataset.input_df[train_dataset.input_df.columns[r]] = train_dataset.target
-    #     test_dataset.input_df[test_dataset.input_df.columns[r]] = test_dataset.target
+    
+    # Positive control: Replace a gene's values with values collinear to the target
+    train_dataset, test_dataset = add_collinear(train_dataset, test_dataset, collinear_features)
     return train_dataset, test_dataset
 
 
@@ -151,3 +149,22 @@ def to_dataloader(train_dataset, test_dataset, batch_size):
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4,)
     val_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=4,)
     return train_loader, val_loader
+
+def add_collinear(train_dataset, test_dataset, collinear_features):
+    if isinstance(collinear_features, list):
+        for f in features:
+            replace_collinear(train_dataset, test_dataset, f)
+    else:
+        for n in range(collinear_features):
+            r = random.randint(0, len(train_dataset.input_df.columns))
+            altered_input_col = train_dataset.input_df.columns[r]
+            train_dataset, test_dataset = replace_collinear(train_dataset, test_dataset, altered_input_col)
+    return train_dataset, test_dataset
+
+def replace_collinear(train_dataset, test_dataset, altered_input_col):
+    train_dataset.altered_inputs.append(altered_input_col)
+    test_dataset.altered_inputs.append(altered_input_col)
+    print('Replace input of: {} with collinear feature.'.format(altered_input_col))
+    train_dataset.input_df[altered_input_col] = train_dataset.target
+    test_dataset.input_df[altered_input_col] = test_dataset.target
+    return train_dataset, test_dataset
