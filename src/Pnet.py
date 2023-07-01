@@ -61,6 +61,7 @@ class PNET_NN(pl.LightningModule):
         self.lr = lr
         self.weight_decay = weight_decay
         self.dropout = dropout
+        
         # Fetch connection masks from reactome network:
         gene_masks, pathway_masks, input_mask = self.reactome_network.get_masks(self.nbr_gene_inputs)
         if random_network:
@@ -86,12 +87,10 @@ class PNET_NN(pl.LightningModule):
             self.layers.append(PNET_Block(gene_masks[i + 1], pathway_masks[i], self.dropout))
             self.preds.append(
                 nn.Sequential(*[nn.Linear(in_features=pathway_masks[i].shape[0] + self.additional_dims,
-                                          out_features=self.output_dim),
-                                nn.Sigmoid()]))
+                                          out_features=self.output_dim)]))
         # Add final prediction layer:
         self.preds.append(nn.Sequential(*[nn.Linear(in_features=pathway_masks[len(gene_masks) - 2].shape[0] +
-                                                                self.additional_dims, out_features=self.output_dim),
-                                          nn.Sigmoid()]))
+                                                                self.additional_dims, out_features=self.output_dim)]))
         # Weighting of the different prediction layers:
         self.attn = nn.Linear(in_features=(len(gene_masks) - 1) * self.output_dim, out_features=self.output_dim)
 
@@ -107,11 +106,11 @@ class PNET_NN(pl.LightningModule):
             x_cat = torch.concat([x, additional_data], dim=1)
             y_hats.append(pred(x_cat))
         y = self.attn(torch.concat(y_hats, dim=1))
-        return y
+        return y, y_hats
 
     def step(self, who, batch, batch_nb):
         x, additional, y = batch
-        pred_y = self(x, additional)
+        pred_y, _ = self(x, additional)
         loss = F.cross_entropy(pred_y, y, reduction='mean')
 
         self.log(who + '_bce_loss', loss)
@@ -199,10 +198,7 @@ class PNET_NN(pl.LightningModule):
 
 
 def fit(model, dataloader, optimizer):
-    if model.output_dim == 1:
-        pred_loss = nn.BCEWithLogitsLoss(reduction='sum')
-    else:
-        pred_loss = nn.CrossEntropyLoss(reduction='sum')
+    pred_loss = get_loss_function(next(iter(dataloader))[-1])
     if torch.cuda.is_available():
         device = torch.device('cuda')
     elif torch.backends.mps.is_available():
@@ -215,8 +211,10 @@ def fit(model, dataloader, optimizer):
         gene_data, additional_data, y = batch
         gene_data, additional_data, y = gene_data.to(device), additional_data.to(device), y.to(device)
         optimizer.zero_grad()
-        y_hat = model(gene_data, additional_data)
+        y_hat, y_hats = model(gene_data, additional_data)
+        aux_losses = [pred_loss(y_h, y) for y_h in y_hats]
         loss = pred_loss(y_hat, y)
+        loss += 0.2*sum(aux_losses)
         running_loss += loss.item()
         loss.backward()
         optimizer.step()
@@ -225,10 +223,7 @@ def fit(model, dataloader, optimizer):
 
 
 def validate(model, dataloader):
-    if model.output_dim == 1:
-        pred_loss = nn.BCEWithLogitsLoss(reduction='sum')
-    else:
-        pred_loss = nn.CrossEntropyLoss(reduction='sum')
+    pred_loss = get_loss_function(next(iter(dataloader))[-1])
     if torch.cuda.is_available():
         device = torch.device('cuda')
     elif torch.backends.mps.is_available():
@@ -240,7 +235,7 @@ def validate(model, dataloader):
     for batch in dataloader:
         gene_data, additional_data, y = batch
         gene_data, additional_data, y = gene_data.to(device), additional_data.to(device), y.to(device)
-        y_hat = model(gene_data, additional_data)
+        y_hat, _ = model(gene_data, additional_data)
         loss = pred_loss(torch.squeeze(y_hat), torch.squeeze(y))
         running_loss += loss.item()
         loss.backward()
@@ -248,7 +243,7 @@ def validate(model, dataloader):
     return loss
 
 
-def train(model, train_loader, test_loader, lr=0.5e-3, weight_decay=1e-4, epochs=300, verbose=False,
+def train(model, train_loader, test_loader, save_path, lr=0.5e-3, weight_decay=1e-4, epochs=300, verbose=False,
           early_stopping=True):
     if torch.cuda.is_available():
         device = torch.device('cuda')
@@ -259,7 +254,7 @@ def train(model, train_loader, test_loader, lr=0.5e-3, weight_decay=1e-4, epochs
         device = torch.device('cpu')
     model = model.to(device)
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
-    early_stopper = util.EarlyStopper(patience=5, min_delta=0.01, verbose=verbose)
+    early_stopper = util.EarlyStopper(save_path, patience=10, min_delta=0.01, verbose=verbose)
     train_scores = []
     test_scores = []
     for epoch in range(epochs):
@@ -271,8 +266,9 @@ def train(model, train_loader, test_loader, lr=0.5e-3, weight_decay=1e-4, epochs
             print(f"Epoch {epoch + 1} of {epochs}")
             print("Train Loss: {}".format(train_epoch_loss))
             print("Test Loss: {}".format(test_epoch_loss))
-        if early_stopper.early_stop(test_epoch_loss) and early_stopping:
+        if early_stopper.early_stop(test_epoch_loss, model) and early_stopping:
             print('Hit early stopping criteria')
+            model.load_state_dict(torch.load(save_path))
             break
     return model, train_scores, test_scores
 
@@ -298,7 +294,7 @@ def evaluate_interpret_save(model, test_dataset, path):
 
 
 
-def run(genetic_data, target, gene_set=None, additional_data=None, test_split=0.2, seed=None, dropout=0.3,
+def run(genetic_data, target, save_path='../results/model', gene_set=None, additional_data=None, test_split=0.2, seed=None, dropout=0.3,
         lr=1e-3, weight_decay=1, batch_size=64, epochs=300, verbose=False, early_stopping=True, train_inds=None,
         test_inds=None, random_network=False, fcnn=False):
     train_dataset, test_dataset = pnet_loader.generate_train_test(genetic_data, target, gene_set, additional_data,
@@ -309,7 +305,7 @@ def run(genetic_data, target, gene_set=None, additional_data=None, test_split=0.
                     output_dim=target.shape[1], random_network=random_network, fcnn=fcnn
                     )
     train_loader, test_loader = pnet_loader.to_dataloader(train_dataset, test_dataset, batch_size)
-    model, train_scores, test_scores = train(model, train_loader, test_loader, lr, weight_decay, epochs, verbose,
+    model, train_scores, test_scores = train(model, train_loader, test_loader, save_path, lr, weight_decay, epochs, verbose,
                                              early_stopping)
     return model, train_scores, test_scores, train_dataset, test_dataset
 
@@ -377,3 +373,19 @@ def visualize_importances(feature_names, importances, title="Average Feature Imp
         plt.xticks(x_pos, feature_names, rotation=90)
         plt.xlabel(axis_title)
         plt.title(title)
+        
+        
+def get_loss_function(output_variable):
+    unique_values = torch.unique(output_variable)
+    if len(unique_values) <= 2 and all(value.item() in [0, 1] for value in unique_values):
+        if output_variable.shape[-1] == 1 or len(output_variable.shape) == 1:
+            # Binary classification
+            loss_function = nn.BCEWithLogitsLoss(reduction='sum')
+        else:
+            # Multiclass classification
+            loss_function = nn.CrossEntropyLoss(reduction='sum')
+    else:
+        # Regression
+        loss_function = nn.MSELoss(reduction='sum')
+    print(loss_function)
+    return loss_function
