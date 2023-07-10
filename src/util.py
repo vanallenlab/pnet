@@ -1,8 +1,11 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import warnings
 import torchmetrics
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
 MUTATIONS_DICT = {"3'Flank": 'Silent',
                   "5'Flank": 'Silent',
@@ -121,6 +124,82 @@ def shuffle_connections(mask):
     for i in range(mask.shape[0]):
         np.random.shuffle(mask[i,:])
     return mask
+
+
+def format_multiclass(target):
+    assert len(target.shape) <= 3, '''Three or more dimensional target, I am confused'''
+    if len(target.shape) == 1 or target.shape[-1] == 1:
+        return make_multiclass_1_hot(target)
+    else:
+        tensor = torch.tensor(target.values)
+        # Verify that each sample is only labelled with one class
+        assert torch.allclose(tensor.sum(dim=1), torch.ones(tensor.shape[0])), '''Sum of rows is not equal to one, 
+        either some samples have multiple class labels or the target is not one hot encoded.'''
+        return target.astype('long')
+
+
+def make_multiclass_1_hot(target):
+    t = torch.tensor(target.values)
+    num_classes = int(torch.max(t).item()) + 1
+    # Perform one-hot encoding
+    binary_labels = F.one_hot(t.view(-1).long(), num_classes)
+    # Reshape the binary labels tensor to match the desired shape (N, C)
+    binary_labels = binary_labels.view(-1, num_classes)
+    return pd.DataFrame(index=target.index, data=binary_labels)
+
+
+def format_binary(target):
+    assert len(target.shape) <= 3, '''Three or more dimensional target, I am confused'''
+    if len(target.shape) == 1 or target.shape[-1] == 1:
+        assert target.isin([0, 1]).all().all(), '''Binary class labels outside [0, 1] were found'''
+        return target.astype('long')
+    else:
+        tensor = torch.tensor(target.values)
+        # Verify that each sample is only labelled with one class
+        assert torch.allclose(tensor.sum(dim=1), torch.ones(tensor.shape[0])), '''Sum of rows is not equal to one, 
+        either some samples have multiple class labels or the target is not one hot encoded.'''
+        positive_label = pd.DataFrame(target).columns[-1]
+        target_transformed = (pd.DataFrame(target)[positive_label] == 1).astype('long').to_frame()
+        return target_transformed
+
+
+def format_target(target, task):
+    if task == 'MC':
+        if target.shape[-1] == 1 or len(target.shape) == 1:
+            warnings.warn('''Multiclass labels should be in One-Hot encoded format. Class labels will be coerced
+                        this might lead to unintended outcomes''')
+        target = format_multiclass(target)
+    if task == 'BC':
+        target = format_binary(target)
+    return target
+
+
+def get_task(target):
+    t = torch.tensor(target.values)
+    unique_values = torch.unique(t)
+    if len(unique_values) <= 2 and all(value.item() in [0, 1] for value in unique_values):
+        if t.shape[-1] == 1 or len(t.shape) == 1:
+            # Binary classification
+            task_name = 'BC'
+        else:
+            # Multiclass classification
+            task_name = 'MC'
+    else:
+        # Regression
+        task_name = 'REG'
+    print('Task defined: {} \n if this is not the intended task please specify task'.format(task_name))
+    return task_name
+
+
+def get_loss_function(task):
+    if task == 'BC':
+        loss_function = nn.BCEWithLogitsLoss(reduction='sum')
+    elif task == 'MC':
+        loss_function = nn.CrossEntropyLoss(reduction='sum')
+    else:
+        loss_function = nn.MSELoss(reduction='sum')
+    print('Loss function used: {}'.format(loss_function))
+    return loss_function
 
 
 class EarlyStopper:

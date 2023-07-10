@@ -7,6 +7,7 @@ import torch.optim as optim
 from torchmetrics.classification import BinaryAUROC
 import numpy as np
 import os
+import warnings
 import pytorch_lightning as pl
 import captum
 import ReactomeNetwork
@@ -52,7 +53,8 @@ class PNET_NN(pl.LightningModule):
 #         parser.add_argument('--dropout', type=float, default=0.2)
 #         return parser
 
-    def __init__(self, reactome_network, nbr_gene_inputs=1, output_dim=1, additional_dims=0, lr=1e-3, weight_decay=1e-5, dropout=0.2, random_network=False, fcnn=False):
+    def __init__(self, reactome_network, task, nbr_gene_inputs=1, output_dim=1, additional_dims=0, lr=1e-3, weight_decay=1e-5,
+                 dropout=0.2, random_network=False, fcnn=False):
         super().__init__()
         self.reactome_network = reactome_network
         self.nbr_gene_inputs = nbr_gene_inputs
@@ -61,6 +63,7 @@ class PNET_NN(pl.LightningModule):
         self.lr = lr
         self.weight_decay = weight_decay
         self.dropout = dropout
+        self.loss_fn = util.get_loss_function(task)
         
         # Fetch connection masks from reactome network:
         gene_masks, pathway_masks, input_mask = self.reactome_network.get_masks(self.nbr_gene_inputs)
@@ -115,6 +118,22 @@ class PNET_NN(pl.LightningModule):
 
         self.log(who + '_bce_loss', loss)
         return loss
+
+    def predict(self,  x, additional_data, threshold=0.5):
+        logits, lower_level_logits = self.forward(x, additional_data)
+        if self.loss_name == 'BCE':
+            probabilities = torch.sigmoid(logits)
+            predictions = (probabilities > threshold).float()
+            return predictions
+        elif self.loss_name == 'CE':
+            softmax = nn.Softmax(dim=1)
+            probabilities = softmax(logits)
+            _, predictions = probabilities.max(dim=1)
+            binary_predictions = (probabilities > threshold).float()
+            return binary_predictions
+        else:
+            return logits
+
 
     def training_step(self, batch, batch_nb):
         # REQUIRED
@@ -198,7 +217,6 @@ class PNET_NN(pl.LightningModule):
 
 
 def fit(model, dataloader, optimizer):
-    pred_loss = get_loss_function(next(iter(dataloader))[-1])
     if torch.cuda.is_available():
         device = torch.device('cuda')
     elif torch.backends.mps.is_available():
@@ -212,9 +230,8 @@ def fit(model, dataloader, optimizer):
         gene_data, additional_data, y = gene_data.to(device), additional_data.to(device), y.to(device)
         optimizer.zero_grad()
         y_hat, y_hats = model(gene_data, additional_data)
-        aux_losses = [pred_loss(y_h, y) for y_h in y_hats]
-        loss = pred_loss(y_hat, y)
-        loss += 0.2*sum(aux_losses)
+        aux_losses = [model.loss_fn(y_h, y) for y_h in y_hats]
+        loss = model.loss_fn(y_hat, y) + 0.2*sum(aux_losses)
         running_loss += loss.item()
         loss.backward()
         optimizer.step()
@@ -223,7 +240,6 @@ def fit(model, dataloader, optimizer):
 
 
 def validate(model, dataloader):
-    pred_loss = get_loss_function(next(iter(dataloader))[-1])
     if torch.cuda.is_available():
         device = torch.device('cuda')
     elif torch.backends.mps.is_available():
@@ -235,8 +251,9 @@ def validate(model, dataloader):
     for batch in dataloader:
         gene_data, additional_data, y = batch
         gene_data, additional_data, y = gene_data.to(device), additional_data.to(device), y.to(device)
-        y_hat, _ = model(gene_data, additional_data)
-        loss = pred_loss(torch.squeeze(y_hat), torch.squeeze(y))
+        y_hat, y_hats = model(gene_data, additional_data)
+        aux_losses = [model.loss_fn(y_h, y) for y_h in y_hats]
+        loss = model.loss_fn(y_hat, y) + 0.2*sum(aux_losses)
         running_loss += loss.item()
         loss.backward()
     loss = running_loss / len(dataloader.dataset)
@@ -296,11 +313,15 @@ def evaluate_interpret_save(model, test_dataset, path):
 
 def run(genetic_data, target, save_path='../results/model', gene_set=None, additional_data=None, test_split=0.2, seed=None, dropout=0.3,
         lr=1e-3, weight_decay=1, batch_size=64, epochs=300, verbose=False, early_stopping=True, train_inds=None,
-        test_inds=None, random_network=False, fcnn=False):
+        test_inds=None, random_network=False, fcnn=False, task=None):
+    if task is None:
+        task = util.get_task(target)
+    target = util.format_target(target, task)
     train_dataset, test_dataset = pnet_loader.generate_train_test(genetic_data, target, gene_set, additional_data,
                                                                   test_split, seed, train_inds, test_inds)
     reactome_network = ReactomeNetwork.ReactomeNetwork(train_dataset.get_genes())
-    model = PNET_NN(reactome_network=reactome_network, nbr_gene_inputs=len(genetic_data), dropout=dropout,
+
+    model = PNET_NN(reactome_network=reactome_network, task=task, nbr_gene_inputs=len(genetic_data), dropout=dropout,
                     additional_dims=train_dataset.additional_data.shape[1], lr=lr, weight_decay=weight_decay,
                     output_dim=target.shape[1], random_network=random_network, fcnn=fcnn
                     )
@@ -373,19 +394,3 @@ def visualize_importances(feature_names, importances, title="Average Feature Imp
         plt.xticks(x_pos, feature_names, rotation=90)
         plt.xlabel(axis_title)
         plt.title(title)
-        
-        
-def get_loss_function(output_variable):
-    unique_values = torch.unique(output_variable)
-    if len(unique_values) <= 2 and all(value.item() in [0, 1] for value in unique_values):
-        if output_variable.shape[-1] == 1 or len(output_variable.shape) == 1:
-            # Binary classification
-            loss_function = nn.BCEWithLogitsLoss(reduction='sum')
-        else:
-            # Multiclass classification
-            loss_function = nn.CrossEntropyLoss(reduction='sum')
-    else:
-        # Regression
-        loss_function = nn.MSELoss(reduction='sum')
-    print(loss_function)
-    return loss_function
