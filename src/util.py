@@ -6,6 +6,8 @@ import torchmetrics
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from sklearn.metrics import roc_auc_score, roc_curve, auc
+
 
 MUTATIONS_DICT = {"3'Flank": 'Silent',
                   "5'Flank": 'Silent',
@@ -35,16 +37,17 @@ MUTATIONS_DICT = {"3'Flank": 'Silent',
                   'Translation_Start_Site': 'Other_nonsynonymous'}
 
 
-def load_tcga_dataset(directory_path):
-    muts = pd.read_csv(directory_path + '/data_mutations.txt', delimiter='\t')
-    grouped_muts = muts[muts['Variant_Classification'].apply(lambda x: MUTATIONS_DICT[x]) != 'Silent'][['Hugo_Symbol',
-                                                                                                    'Variant_Classification',
-                                                                                                    'Tumor_Sample_Barcode']].groupby(['Tumor_Sample_Barcode',
-                                                                                                                                      'Hugo_Symbol']).count()
-    rna = pd.read_csv(directory_path + '/data_mrna_seq_v2_rsem.txt',
-                      sep='\t',
-                      low_memory=False
-                      ).dropna().set_index('Hugo_Symbol').drop(['Entrez_Gene_Id'], axis=1).T
+def load_tcga_dataset(directory_path, load_mut=False, rna_standardized=True):
+    if rna_standardized:
+        rna = pd.read_csv(directory_path + '/data_mrna_seq_v2_rsem_zscores_ref_all_samples.txt',
+                          sep='\t',
+                          low_memory=False
+                          ).dropna().set_index('Hugo_Symbol').drop(['Entrez_Gene_Id'], axis=1).T
+    else:
+        rna = pd.read_csv(directory_path + '/data_mrna_seq_v2_rsem.txt',
+                          sep='\t',
+                          low_memory=False
+                          ).dropna().set_index('Hugo_Symbol').drop(['Entrez_Gene_Id'], axis=1).T
     rna = rna.loc[:,~rna.columns.duplicated()].astype(float).copy()
     cna = pd.read_csv(directory_path + '/data_cna.txt',
                       low_memory=False,
@@ -57,13 +60,19 @@ def load_tcga_dataset(directory_path):
     tumor_type = pd.DataFrame(len(indices)*[directory_path.split('/')[-1].split('_')[0]],
                               index = indices, columns=['tumor'])
     
-    mut = pd.DataFrame(index=rna.index, columns=rna.columns).fillna(0)
-    for i in grouped_muts.iterrows():
-        try: 
-            mut.loc[i[0][0]][i[0][1]] = 1
-        except KeyError:
-            pass
-    return rna[genes], cna[genes], tumor_type, mut
+    if load_mut:
+        muts = pd.read_csv(directory_path + '/data_mutations.txt', delimiter='\t')
+        grouped_muts = muts[muts['Variant_Classification'].apply(lambda x: MUTATIONS_DICT[x]) != 'Silent'][['Hugo_Symbol',
+                                                                                                        'Variant_Classification',
+                                                                                                        'Tumor_Sample_Barcode']].groupby(['Tumor_Sample_Barcode',
+                                                                                                                                          'Hugo_Symbol']).count()
+        mut = grouped_muts.unstack(level=-1).fillna(0).droplevel(0, axis=1)
+        
+        genes = list(set(genes).intersection(mut.columns))
+        indices = list(set(indices).intersection(mut.index))
+        return rna[genes], cna[genes], tumor_type, mut[genes]
+    else:
+        return rna[genes], cna[genes], tumor_type
 
 
 def select_highly_variable_genes(df, bins=10, genes_per_bin=100):
@@ -74,39 +83,100 @@ def select_highly_variable_genes(df, bins=10, genes_per_bin=100):
     return bin_assignment.join(gene_std).groupby('bin')['std'].nlargest(genes_per_bin).reset_index()
 
 
-def draw_auc(fpr, tpr, auc, draw, save=False):
+def draw_auc(fpr, tpr, auc_score, draw, save=False):
     if isinstance(fpr, list):
         fpr, tpr = fpr[draw], tpr[draw]
-    plt.plot(fpr, tpr, color="darkorange", label="ROC curve (area = %0.2f)" % auc)
+    plt.plot(fpr, tpr, color="darkorange", label="ROC curve (area = %0.2f)" % auc_score)
     plt.ylabel('True Positive Rate')
     plt.xlabel('False Positive Rate')
     plt.plot([0, 1], [0, 1], color="navy", linestyle="--")
     plt.legend(loc="lower right")
+    plt.gca().spines['top'].set_visible(False)
+    plt.gca().spines['right'].set_visible(False)
+    if save:
+        plt.savefig(save)
+    else:
+        plt.show()
+        
+def draw_loss(train_scores, test_scores, save=False):
+    epochs = range(1, len(train_scores) + 1)
+
+    plt.plot(epochs, train_scores, label='Train Loss', color='navy')
+    plt.plot(epochs, test_scores, label='Test Loss', color='indianred')
+    plt.xlabel('Epochs')
+    plt.ylabel('Loss')
+    plt.title('Train and Test Loss Curves')
+    plt.gca().spines['top'].set_visible(False)
+    plt.gca().spines['right'].set_visible(False)
+    plt.legend()
     if save:
         plt.savefig(save)
     else:
         plt.show()
 
 
-def get_auc(pred, target, draw=0, save=False):
+def get_auc(pred_proba, target, draw=0, save=False):
+    target=target.to(torch.int)
     if len(target.shape) > 1 and target.shape[1] > 1:
-        collapsed_target = target.argmax(axis=1)
+        auc_score = multiclass_auc(pred_proba, target, save)
     else:
         collapsed_target = target.int()
-    num_classes = int(max(collapsed_target) + 1)
-    print(pred.shape)
-    if pred.shape[1] > 1:
-        print('Getting multiclass AUC as One vs. Rest')
-        auroc = torchmetrics.AUROC(task='multiclass', num_classes=num_classes)
-        roc = torchmetrics.ROC(task='multiclass', num_classes=num_classes)
-    else:
-        print('doing binary')
         auroc = torchmetrics.AUROC(task='binary')
         roc = torchmetrics.ROC(task='binary')
-    auc = auroc(pred, collapsed_target)
-    fpr, tpr, tresholds = roc(pred, collapsed_target)
-    draw_auc(fpr, tpr, auc, draw, save=save)
-    return auc
+        auc_score = auroc(pred_proba, collapsed_target)
+        fpr, tpr, tresholds = roc(pred_proba, collapsed_target)
+        draw_auc(fpr, tpr, auc_score, draw, save=save)
+    return auc_score
+
+
+def get_auc_prc(pred_proba, target):
+    target=target.to(torch.int)
+    if len(target.shape) > 1 and target.shape[1] > 1:
+        num_classes = target.shape[1]
+        target = target.argmax(axis=1)
+        auc_prc = torchmetrics.functional.average_precision(pred_proba, target, task='multiclass', num_classes=num_classes)
+    else:
+        auc_prc = torchmetrics.functional.average_precision(pred_proba, target, task='binary')
+    return auc_prc.item() 
+
+
+def get_f1(pred, target):
+    target=target.to(torch.int)
+    pred=pred.to(torch.int)
+    if len(target.shape) > 1 and target.shape[1] > 1:
+        num_classes = target.shape[1]
+        f1_scores = torchmetrics.functional.f1_score(pred, target, num_classes=num_classes, task='multiclass')
+    else:
+        f1_scores = torchmetrics.functional.f1_score(pred, target, task='binary')
+    return f1_scores
+
+
+def multiclass_auc(pred_proba, target, save=False):
+    # Get the predicted class labels from the probabilities
+    predicted_labels = np.argmax(pred_proba, axis=1)
+
+    # Calculate the AUC and ROC curves for each class
+    num_classes = pred_proba.shape[1]
+    auc_scores = []
+    roc_curves = []
+
+    for i in range(num_classes):
+        y_true = target[:, i]
+        y_score = pred_proba[:, i]
+
+        # Calculate AUC
+        auc_score = roc_auc_score(y_true, y_score)
+        auc_scores.append(auc_score)
+
+        # Calculate ROC curve
+        fpr, tpr, _ = roc_curve(y_true, y_score)
+        roc_curves.append((fpr, tpr))
+
+    for i in range(num_classes):
+        fpr, tpr = roc_curves[i]
+        roc_auc = auc(fpr, tpr)
+        draw_auc(fpr, tpr, roc_auc, draw=0, save=save)
+    return auc_scores
 
 
 def select_non_constant_genes(df, cutoff=0.05):
@@ -131,7 +201,7 @@ def format_multiclass(target):
     if len(target.shape) == 1 or target.shape[-1] == 1:
         return make_multiclass_1_hot(target)
     else:
-        tensor = torch.tensor(target.values)
+        tensor = torch.tensor(target.values, dtype=torch.float)
         # Verify that each sample is only labelled with one class
         assert torch.allclose(tensor.sum(dim=1), torch.ones(tensor.shape[0])), '''Sum of rows is not equal to one, 
         either some samples have multiple class labels or the target is not one hot encoded.'''
@@ -189,6 +259,27 @@ def get_task(target):
         task_name = 'REG'
     print('Task defined: {} \n if this is not the intended task please specify task'.format(task_name))
     return task_name
+
+
+def get_class_weights(target):
+    class_counts = torch.bincount(target)
+    total_samples = class_counts.sum().float()
+
+    # Calculate inverse class frequencies
+    class_weights = total_samples / (class_counts.float() + 1e-7)  # Add small epsilon to avoid division by zero
+
+    # Normalize class weights
+    class_weights = class_weights / class_weights.sum()
+    return class_weights
+
+
+def BCELoss_class_weighted(weights):
+
+    def loss(input, target):
+        input = torch.clamp(input,min=1e-7,max=1-1e-7)
+        bce = - weights[1] * target * torch.log(input) - (1 - target) * weights[0] * torch.log(1 - input)
+        return torch.sum(bce)
+    return loss
 
 
 def get_loss_function(task):

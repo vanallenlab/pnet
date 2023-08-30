@@ -49,7 +49,7 @@ class ReactomeNetwork:
         unused_genes_df = pd.DataFrame(columns=['pathway', 'gene'])
         unused_genes_df['gene'] = unused_genes
         unused_genes_df['pathway'] = 'residual'
-        return pd.concat([pathway2genes, unused_genes_df])
+        return pd.concat([pathway2genes, unused_genes_df]).reset_index(drop=True)
 
     @staticmethod
     def load_pathway_encoding(species="HSA"):
@@ -176,7 +176,7 @@ class ReactomeNetwork:
         """
         gene_layers = []
         pathway_layers = []
-        for level in reversed(range(self.max_level)):
+        for level in reversed(range(1, self.max_level)):
             pathway_nodes = self.nodes_per_level[level]
             higher_level_pathway_nodes = self.nodes_per_level[level-1]
             if pathway_nodes:       # Only add layers if there is nodes in layer

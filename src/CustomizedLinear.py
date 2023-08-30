@@ -113,7 +113,7 @@ class CustomizedLinearFunction(torch.autograd.Function):
         return grad_input, grad_weight, grad_bias, grad_mask
 
 
-def masked_activation(mask, pos_weights=False, activation=None, batchnorm=False):
+def masked_activation(mask, pos_weights=False, activation=None, batchnorm=False, dropout=False):
     """
     Generating a sparse linear layer respecting the adjacency matrix given in the mask
     :param mask: np.array; adjacency matrix for connections in the linear layer
@@ -137,5 +137,8 @@ def masked_activation(mask, pos_weights=False, activation=None, batchnorm=False)
 
     if activation is not None:
         module.append(activation_pool[activation])
+        
+    if dropout is not None:
+        module.append(nn.Dropout(dropout))
 
     return module
