@@ -8,8 +8,11 @@ PATHWAY_COLOR = '#00629B'
 RES_COLOR = '#FFA300'
 
 class SankeyDiag:
-    def __init__(self, imps_dir):
-        self.all_imps = self.load_importance_scores(imps_dir)
+    def __init__(self, imps_dir, runs=1):
+        if runs>1:
+            self.all_imps = self.load_multiple_runs(imps_dir, runs)
+        else:
+            self.all_imps = self.load_importance_scores(imps_dir)
         self.grouped_imps = self.group_importance_scores()
         self.rn = self.get_reactome_network_for_imps()
 
@@ -21,6 +24,15 @@ class SankeyDiag:
         self.pathway_to_output_layer()
         self.short_name_dict = self.get_short_names()
         
+        
+    def load_multiple_runs(self, results_dir, runs):
+        all_importances = pd.DataFrame()
+        for i in range(runs):
+            run_i_imps = self.load_importance_scores('{}/run{}/'.format(results_dir,i))
+            run_i_imps['Run'] = i
+            all_importances = pd.concat([all_importances, run_i_imps])
+        return all_importances
+    
         
     def load_importance_scores(self, results_dir):
         layer_list = [x for x in os.listdir(results_dir) if x[-3:] == 'csv' and x[:5] == 'layer']
@@ -216,7 +228,7 @@ class SankeyDiag:
         short_names['Short name (Eli)'].fillna(short_names['Short name (automatic)'], inplace=True)
         short_names.set_index('Full name', inplace=True)
         short_name_dict = short_names['Short name (Eli)'].to_dict()
-        for i in range(6):
+        for i in range(7):
             short_name_dict['Residual_{}'.format(i)] = 'Residual'
         for elem in self.numerical_encoding:
             short_name_dict[elem] = short_name_dict.get(elem, elem)

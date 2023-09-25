@@ -408,7 +408,7 @@ def run(genetic_data, target, save_path='../results/model', gene_set=None, addit
     target = util.format_target(target, task)
     train_dataset, test_dataset = pnet_loader.generate_train_test(genetic_data, target, gene_set, additional_data,
                                                                   test_split, seed, train_inds, test_inds)
-    
+    f
     reactome_network = ReactomeNetwork.ReactomeNetwork(train_dataset.get_genes())
 
     model = PNET_NN(reactome_network=reactome_network, task=task, nbr_gene_inputs=len(genetic_data), dropout=dropout,

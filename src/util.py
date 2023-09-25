@@ -34,7 +34,10 @@ MUTATIONS_DICT = {"3'Flank": 'Silent',
                   'In_Frame_Del': 'Other_nonsynonymous',
                   'In_Frame_Ins': 'Other_nonsynonymous',
                   'De_novo_Start_InFrame': 'Other_nonsynonymous',
-                  'Translation_Start_Site': 'Other_nonsynonymous'}
+                  'De_novo_Start_OutOfFrame': 'Other_nonsynonymous',
+                  'Translation_Start_Site': 'Other_nonsynonymous',
+                  'Start_Codon_SNP': 'Other_nonsynonymous',
+                  'Start_Codon_Ins': 'LOF'}
 
 
 def load_tcga_dataset(directory_path, load_mut=False, rna_standardized=True):
