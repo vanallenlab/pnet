@@ -11,6 +11,7 @@ class ReactomeNetwork:
         self.pathway_encoding = self.load_pathway_encoding()
         self.hierarchy = self.load_hierarchy()
         self.graph = self.generate_graph()
+        self.reg_relations= pd.read_csv('../data/regulatory/collectri_filtered.csv')
 
         # Store metadata and prepare for mask extraction
         self.max_level = min(self.get_number_of_layers(), max_depth)
@@ -199,8 +200,22 @@ class ReactomeNetwork:
                 gene_layers.append(gene_connections)
                 pathway_layers.append(pathway_connections)
         return gene_layers, pathway_layers
+    
+    def get_reg_mask(self):
+        reg_relations_filtered = self.reg_relations.loc[self.reg_relations['Origin'].isin(self.gene_list) &self.reg_relations['Target'].isin(self.gene_list)]
+        reg_origins = set(reg_relations_filtered['Origin'].values)
+        extra_mask = pd.DataFrame(index=self.gene_list, columns=self.gene_list).fillna(0)
+        
+        for col in reg_origins:
+            extra_mask[col].loc[col]=1
 
-    def get_masks(self, nbr_genetic_input_types):
+            matched_indices = reg_relations_filtered.loc[reg_relations_filtered['Origin'] == col, 'Target'].values
+            for ind in matched_indices:
+                extra_mask[col].loc[ind]= reg_relations_filtered['weight'].loc[(reg_relations_filtered['Origin']==col) &(reg_relations_filtered['Target']==ind)].values 
+        print('Added regulatory layer')
+        return extra_mask
+
+    def get_masks(self, nbr_genetic_input_types, regulatory=False):
         """
         Transforms pd.DataFrame adjacency matrices into binary np.array masks. Input layer connections based on the
          number of genetic inputs.
@@ -214,6 +229,8 @@ class ReactomeNetwork:
             input_mask[col].loc[col] = 1
         gene_masks = [l.values for l in self.gene_layers]
         pathway_masks = [l.values for l in self.pathway_layers]
-        return gene_masks, pathway_masks, input_mask.values
-
-
+        if regulatory:
+            reg_mask = self.get_reg_mask()
+            return gene_masks, pathway_masks, input_mask.values, reg_mask.values
+        else:
+            return gene_masks, pathway_masks, input_mask.values

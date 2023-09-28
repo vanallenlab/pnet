@@ -40,19 +40,6 @@ class PNET_Block(nn.Module):
 
 
 class PNET_NN(pl.LightningModule):
-
-#     @staticmethod
-#     def add_model_specific_args(parent_parser):
-#         parser = ArgumentParser(parents=[parent_parser], add_help=False)
-#         parser.add_argument('--reactome_network', type=ReactomeNetwork.ReactomeNetwork)
-#         parser.add_argument('--nbr_gene_inputs', type=int, default=1)
-#         parser.add_argument('--additional_dims', type=int, default=0)
-
-#         parser.add_argument('--lr', type=float, default=1e-3)
-#         parser.add_argument('--weight_decay', type=float, default=1e-5)
-#         parser.add_argument('--dropout', type=float, default=0.2)
-#         return parser
-
     def __init__(self, reactome_network, task, nbr_gene_inputs=1, output_dim=1, additional_dims=0, lr=1e-3, weight_decay=1e-5,
                  dropout=0.1, gene_dropout=0.1, input_dropout=0.5, activation='tanh', loss_fn=None, random_network=False, fcnn=False,
                  loss_weight=None, aux_loss_weights=[15, 2, 7, 20, 54, 148, 400]):
