@@ -77,14 +77,14 @@ mutations_dict = {"3'Flank": 'Silent',
 
 
 def get_somatic_mutation():
-    logging.info("getting somatic mutation data")
+    logging.info("Getting somatic mutation data")
     somatic_mut = load_somatic_mut()
     somatic_mut = format_mutation_data(somatic_mut)
     return somatic_mut
 
 
 def get_germline_mutation():
-    logging.info("getting germline mutation data")
+    logging.info("Getting germline mutation data")
     germline_var_df = load_germline_mut()
     germline_mut = format_germline_mutation_data(germline_var_df)
     return germline_mut
@@ -98,26 +98,22 @@ def get_somatic_amp_and_del():
     return somatic_amp, somatic_del  
 
 
-def get_target(id_to_use = "Tumor_Sample_Barcode", target_col="is_met"): # TODO: edit/finish. START HERE.
+def get_target(id_map_f, sample_metadata_f, id_to_use = "Tumor_Sample_Barcode", target_col="is_met"):
     """
     Get a DF of the target variable indexed by a sample ID.
     """
     logging.info("Getting prediction target") # TODO: alter to work when we aren't using paired samples
-    sample_metadata = load_sample_metadata_and_target()
+    sample_metadata = load_sample_metadata_and_target(id_map_f, sample_metadata_f)
     target = extract_target(sample_metadata, id_to_use=id_to_use, target_col="is_met")
     logging.info(f"Target column value_counts: {target[target_col].value_counts()}")
     return target
 
 
-def load_sample_metadata_and_target():
+def load_sample_metadata_and_target(id_map_f, sample_metadata_f):
     # TODO: start here. Check if running this gets us to have all the columns as we would with the next ~7 lines of code; I think the output will be equivalent after we restrict to paired samples!
-    logging.debug("defining paths for the sample metadata")
-    GERMLINE_DATADIR = "../../pnet_germline/data/"
-    germline_somatic_id_map_f = os.path.join(GERMLINE_DATADIR, "prostate/germline_somatic_id_map_outer_join.csv")
-    sample_metadata_f = os.path.join(GERMLINE_DATADIR,"prostate/pathogenic_variants_with_clinical_annotation_1341_aug2021_correlation.csv")
 
     logging.info("Loading the sample metadata DF that has all the IDs and also our target, metastatic status ('is_met')")
-    sample_metadata = utils.load_sample_metadata_with_all_germline_ids(sample_metadata_f, germline_somatic_id_map_f)
+    sample_metadata = utils.load_sample_metadata_with_all_germline_ids(sample_metadata_f, id_map_f) # TODO: start here. Can we remove reliance on this function, and use a simpler one instead?
     logging.debug(sample_metadata.head())
     logging.debug(sample_metadata.shape)
     # sample_metadata = utils.load_sample_metadata_with_all_germline_ids(sample_metadata_f, germline_id_map_f)
@@ -143,33 +139,23 @@ def extract_target(df, id_to_use = "Tumor_Sample_Barcode", target_col = "is_met"
     return target
 
 
-def load_somatic_mut():
-    SOMATIC_DATADIR = "../../pnet_germline/data/pnet_database/prostate/processed"
-    somatic_mut_f = os.path.join(SOMATIC_DATADIR, "P1000_final_analysis_set_cross_important_only.csv")
- 
-    logging.info(f"load somatic mutation data from {somatic_mut_f}")
+def load_somatic_mut(somatic_mut_f):
+    logging.info(f"Load somatic mutation data from {somatic_mut_f}")
     somatic_mut = load_df_verbose(somatic_mut_f)
     somatic_mut.set_index('Tumor_Sample_Barcode', inplace=True)
     return somatic_mut
 
 
-def load_somatic_cnv():
-    SOMATIC_DATADIR = "../../pnet_germline/data/pnet_database/prostate/processed"
-    somatic_cnv_f = os.path.join(SOMATIC_DATADIR, "P1000_data_CNA_paper.csv") # TODO: check how PNET implements splitting this into amp vs del
-
-    logging.info(f"load somatic CNV data from {somatic_cnv_f}")
+def load_somatic_cnv(somatic_cnv_f):
+    logging.info(f"Load somatic CNV data from {somatic_cnv_f}")
     cnv = load_df_verbose(somatic_cnv_f)
     cnv.rename(columns={"Unnamed: 0": "Tumor_Sample_Barcode"}, inplace=True)
     cnv.set_index('Tumor_Sample_Barcode', inplace=True)
     return cnv
 
 
-def load_somatic_response(): # TODO: this function might be made redundant by the get_target function. 
+def load_somatic_response(response_f): # TODO: this function might be made redundant by the get_target function. 
     # TODO: this isn't the optimal way; I think I should start from one of my metadata matrices
-    
-    logging.debug("defining paths")
-    response_f = '../../pnet_germline/data/pnet_database/prostate/processed/response_paper.csv'
-
     logging.info(f"load somatic response data from {response_f}")
     response = load_df_verbose(response_f)
     response.rename(columns={'id': "Tumor_Sample_Barcode"}, inplace=True)
@@ -177,12 +163,8 @@ def load_somatic_response(): # TODO: this function might be made redundant by th
     return response
 
 
-def load_germline_mut(): # TODO: deal with paths
-    logging.info("loading germline mutation data")
-    GERMLINE_DATADIR = "../../pnet_germline/data/"
-    # germline_vars_f = os.path.join(GERMLINE_DATADIR, "prostate/prostate_germline_vcf_subset_to_germline_tier_1and2_pathogenic_vars_only.txt")
-    germline_vars_f = os.path.join(GERMLINE_DATADIR, "prostate/prostate_germline_vcf_subset_to_germline_tier_12_and_somatic_pathogenic_vars_only.txt")
-
+def load_germline_mut(germline_vars_f): # TODO: deal with paths
+    logging.info(f"Loading germline mutation data from {germline_vars_f}")
     germline_var_df = pd.read_csv(germline_vars_f, low_memory=False, sep="\t")
     germline_var_df = germline_var_df.set_index("Uploaded_variation")
     logging.info(f"Shape of raw germline mutation data: {germline_var_df.shape()}")
@@ -887,10 +869,24 @@ def main():
     ZERO_IMPUTE_GERMLINE = True
     ZERO_IMPUTE_SOMATIC = False
 
-    somatic_mut = get_somatic_mutation()
-    somatic_amp, somatic_del = get_somatic_amp_and_del()
-    germline_mut = get_germline_mutation()  
-    y = get_target(id_to_use="Tumor_Sample_Barcode", target_col="is_met")
+    logging.debug("Defining paths for somatic data")
+    SOMATIC_DATADIR = "../../pnet_germline/data/pnet_database/prostate/processed"
+    somatic_mut_f = os.path.join(SOMATIC_DATADIR, "P1000_final_analysis_set_cross_important_only.csv")
+    somatic_cnv_f = os.path.join(SOMATIC_DATADIR, "P1000_data_CNA_paper.csv") # TODO: check how PNET implements splitting this into amp vs del
+    
+    logging.debug("Defining paths for germline data")
+    GERMLINE_DATADIR = "../../pnet_germline/data/"
+    # germline_vars_f = os.path.join(GERMLINE_DATADIR, "prostate/prostate_germline_vcf_subset_to_germline_tier_1and2_pathogenic_vars_only.txt")
+    germline_vars_f = os.path.join(GERMLINE_DATADIR, "prostate/prostate_germline_vcf_subset_to_germline_tier_12_and_somatic_pathogenic_vars_only.txt")
+
+    logging.debug("Defining paths for the sample metadata")
+    id_map_f = os.path.join(GERMLINE_DATADIR, "prostate/germline_somatic_id_map_outer_join.csv") # germline_somatic_id_map_f
+    sample_metadata_f = os.path.join(GERMLINE_DATADIR,"prostate/pathogenic_variants_with_clinical_annotation_1341_aug2021_correlation.csv")
+
+    somatic_mut = get_somatic_mutation(somatic_mut_f)
+    somatic_amp, somatic_del = get_somatic_amp_and_del(somatic_cnv_f)
+    germline_mut = get_germline_mutation(germline_vars_f)  
+    y = get_target(id_map_f, sample_metadata_f, id_to_use="Tumor_Sample_Barcode", target_col="is_met")
     # TODO: deal with adding confounder dataset: get_confounders(), etc.
 
     if USE_ONLY_PAIRED or CONVERT_IDS_TO: # Need to test the function going both ways, to somatic and to germline
@@ -935,7 +931,6 @@ def main():
     logging.info(f"These are the {len([i for i in somatic_mut.index.tolist() if i not in sample_metadata.Tumor_Sample_Barcode.tolist()])} unpaired samples")
     logging.debug(f"samples: {[i for i in somatic_mut.index.tolist() if i not in sample_metadata.Tumor_Sample_Barcode.tolist()]}")
 
-    
     
     logging.info("# Generate the PNET loader")
     PNET_SPLITS_DIR = "../../pnet_germline/data/pnet_database/prostate/splits"
