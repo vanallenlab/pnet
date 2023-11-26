@@ -110,7 +110,7 @@ def get_indicies(genetic_data, target, additional_data=None):
 
 
 def generate_train_test(genetic_data, target, gene_set=None, additional_data=None, test_split=0.3, seed=None,
-                        train_inds=None, test_inds=None, collinear_features=0):
+                        train_inds=None, test_inds=None, collinear_features=0, shuffle_labels=False):
     """
     Takes all data modalities to be used and generates a train and test DataSet with a given split.
     :param genetic_data: Dict(str: pd.DataFrame); requires a dict containing a pd.DataFrame for each data modality
@@ -147,6 +147,10 @@ def generate_train_test(genetic_data, target, gene_set=None, additional_data=Non
     
     # Positive control: Replace a gene's values with values collinear to the target
     train_dataset, test_dataset = add_collinear(train_dataset, test_dataset, collinear_features)
+    # Positive control: Shuffle labels for prediction
+    if shuffle_labels:
+        train_dataset = shuffle_data_labels(train_dataset)
+        test_dataset = shuffle_data_labels(test_dataset)
     return train_dataset, test_dataset
 
 
@@ -165,6 +169,13 @@ def add_collinear(train_dataset, test_dataset, collinear_features):
             altered_input_col = train_dataset.input_df.columns[r]
             train_dataset, test_dataset = replace_collinear(train_dataset, test_dataset, altered_input_col)
     return train_dataset, test_dataset
+
+def shuffle_data_labels(dataset):
+    print('shuffling {} labels'.format(dataset.target.shape[0]))
+    target_copy = dataset.target.copy()
+    target_copy[target_copy.columns[0]] = dataset.target.sample(frac=1).reset_index(drop=True).values
+    dataset.target = target_copy
+    return dataset
 
 def replace_collinear(train_dataset, test_dataset, altered_input_col):
     train_dataset.altered_inputs.append(altered_input_col)

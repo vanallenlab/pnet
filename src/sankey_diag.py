@@ -1,19 +1,22 @@
 import os
 import pandas as pd
+import numpy as np
 import ReactomeNetwork
 import plotly.graph_objects as go
+from scipy.stats import zscore
 
 GENE_COLOR = '#41B6E6'
 PATHWAY_COLOR = '#00629B'
 RES_COLOR = '#FFA300'
 
 class SankeyDiag:
-    def __init__(self, imps_dir, runs=1):
+    def __init__(self, imps_dir, target=None, runs=1):
         if runs>1:
             self.all_imps = self.load_multiple_runs(imps_dir, runs)
         else:
             self.all_imps = self.load_importance_scores(imps_dir)
-        self.grouped_imps = self.group_importance_scores()
+        self.grouped_imps = self.group_importance_scores(target)
+        self.normalize_layerwise()
         self.rn = self.get_reactome_network_for_imps()
 
         self.initialize_links()
@@ -48,11 +51,25 @@ class SankeyDiag:
         return all_imps
 
 
-    def group_importance_scores(self):
-        grouped_imps = pd.DataFrame(self.all_imps.groupby(['Gene/Pathway', 'Layer']).mean().abs().reset_index())
+    def group_importance_scores(self, target):
+        if target is not None:
+            response = target.columns[0]
+            imps_w_target = self.all_imps.merge(target, left_on='Sample', right_index=True)
+            grouped_imps = imps_w_target.groupby(['Gene/Pathway', 'Layer', response]).mean().diff().abs()
+            grouped_imps = grouped_imps.query('{} == 1'.format(response)).reset_index()
+        else:
+            grouped_imps = pd.DataFrame(self.all_imps.groupby(['Gene/Pathway', 'Layer']).mean().abs().reset_index())
         return grouped_imps
+    
+    
+    def normalize_layerwise(self):
+        layer_normalized_imps = pd.Series(dtype=float)
+        for l in self.grouped_imps['Layer'].unique():
+            normalized = NormalizeData(self.grouped_imps[self.grouped_imps['Layer']==l]['Importance'])
+            layer_normalized_imps = layer_normalized_imps.append(normalized)
+        self.grouped_imps['Importance'] = layer_normalized_imps
 
-
+        
     def get_reactome_network_for_imps(self):
         self.genes = self.grouped_imps[self.grouped_imps['Layer']=='gene']['Gene/Pathway'].unique()
         rn = ReactomeNetwork.ReactomeNetwork(self.genes)
@@ -239,7 +256,7 @@ class SankeyDiag:
         fig = go.Figure(data=[go.Sankey(
             node = dict(
               pad = 15,
-              thickness = 20,
+              thickness = 10,
               line = dict(color = "black", width = 0.5),
               label = list([self.short_name_dict[x] for x in self.numerical_encoding.keys()]),
               color = 'silver'
@@ -250,3 +267,7 @@ class SankeyDiag:
         fig.write_html(savepath)
         fig.show()
         return fig
+    
+    
+def NormalizeData(data):
+    return (data - np.min(data)) / (np.max(data) - np.min(data))

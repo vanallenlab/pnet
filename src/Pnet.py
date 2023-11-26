@@ -16,6 +16,7 @@ import GenesetNetwork
 import pnet_loader
 from CustomizedLinear import masked_activation
 import util
+from scipy.stats import zscore
 
 
 class PNET_Block(nn.Module):
@@ -344,7 +345,7 @@ class PNET_NN(pl.LightningModule):
             plt.rcParams["figure.figsize"] = (6,8)
             gene_importances[list(gene_order[-20:])].plot(kind='box', vert=False)
             plt.savefig(plot+'/imp_genes.pdf')
-        self.interpret_flag=False
+        self.interpret_flag=False            
         return gene_feature_importances, additional_feature_importances, gene_importances, layer_importance_scores
 
 
@@ -444,16 +445,19 @@ def evaluate_interpret_save(model, test_dataset, path):
     additional_test = test_dataset.additional
     y_test = test_dataset.y
     model.to('cpu')
-    pred_proba = model.predict_proba(x_test, additional_test).detach()
-    pred = model.predict(x_test, additional_test).detach()
-    auc_score = util.get_auc(pred_proba, y_test, save=path+'/auc_curve.pdf')
-    auc_prc = util.get_auc_prc(pred_proba, y_test)
-    f1_score = util.get_f1(pred, y_test)
+    if model.task=='BC' or model.task=='MC':
+        pred_proba = model.predict_proba(x_test, additional_test).detach()
+        pred = model.predict(x_test, additional_test).detach()
+        auc_score = util.get_auc(pred_proba, y_test, save=path+'/auc_curve.pdf')
+        auc_prc = util.get_auc_prc(pred_proba, y_test)
+        f1_score = util.get_f1(pred, y_test)
+        
     
-    torch.save(pred_proba, path+'/prediction_probabilities.pt')
-    torch.save(auc_score, path+'/AUC.pt')
-    torch.save(auc_prc, path+'/AUC_PRC.pt')
-    torch.save(f1_score, path+'/F1.pt')
+        torch.save(pred_proba, path+'/prediction_probabilities.pt')
+        torch.save(auc_score, path+'/AUC.pt')
+        torch.save(auc_prc, path+'/AUC_PRC.pt')
+        torch.save(f1_score, path+'/F1.pt')
+        
     gene_feature_importances, additional_feature_importances, gene_importances, layer_importance_scores = model.interpret(test_dataset)
     gene_feature_importances.to_csv(path+'/gene_feature_importances.csv')
     additional_feature_importances.to_csv(path+'/additional_feature_importances.csv')
@@ -463,16 +467,15 @@ def evaluate_interpret_save(model, test_dataset, path):
 
 
 
-def run(genetic_data, target, save_path='../results/model', gene_set=None, additional_data=None, test_split=0.2, seed=None, dropout=0.2,
-        input_dropout=0.5, lr=1e-3, weight_decay=1e-3, batch_size=64, epochs=400, verbose=False, early_stopping=True, train_inds=None,
-        test_inds=None, random_network=False, fcnn=False, task=None, loss_fn=None, loss_weight=None, aux_loss_weights=[2, 7, 20, 54, 148, 400]):
+def run(genetic_data, target, save_path='../results/model', gene_set=None, additional_data=None, test_split=0.2, seed=None, dropout=0.2,input_dropout=0.5, lr=1e-3, weight_decay=1e-3, batch_size=64, epochs=400, verbose=False, early_stopping=True, train_inds=None, test_inds=None, random_network=False, fcnn=False, shuffle_labels=False, task=None, loss_fn=None, loss_weight=None, aux_loss_weights=[2, 7, 20, 54, 148, 400], drop_pathways=[]):
     if task is None:
         task = util.get_task(target)
     target = util.format_target(target, task)
     train_dataset, test_dataset = pnet_loader.generate_train_test(genetic_data, target, gene_set, additional_data,
-                                                                  test_split, seed, train_inds, test_inds)
+                                                                  test_split, seed, train_inds, test_inds,
+                                                                  shuffle_labels=shuffle_labels)
     
-    reactome_network = ReactomeNetwork.ReactomeNetwork(train_dataset.get_genes())
+    reactome_network = ReactomeNetwork.ReactomeNetwork(train_dataset.get_genes(), pathways_to_drop=drop_pathways)
 
     model = PNET_NN(reactome_network=reactome_network, task=task, nbr_gene_inputs=len(genetic_data), dropout=dropout,
                     additional_dims=train_dataset.additional_data.shape[1], lr=lr, weight_decay=weight_decay,

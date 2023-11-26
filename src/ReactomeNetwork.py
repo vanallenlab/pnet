@@ -4,13 +4,14 @@ import pandas as pd
 
 
 class ReactomeNetwork:
-    def __init__(self, gene_list, trim=0, max_depth=6):
+    def __init__(self, gene_list, trim=0, max_depth=6, pathways_to_drop=[]):
         # Loading connections and setting up graph
         self.gene_list = gene_list
         self.pathway2genes = self.load_pathway2genes()
         self.pathway_encoding = self.load_pathway_encoding()
         self.hierarchy = self.load_hierarchy()
         self.graph = self.generate_graph()
+        self.drop_pathways(pathways_to_drop)
         self.reg_relations= pd.read_csv('../data/regulatory/collectri_filtered.csv')
 
         # Store metadata and prepare for mask extraction
@@ -165,6 +166,16 @@ class ReactomeNetwork:
         input_genes = list(self.pathway2genes[self.pathway2genes['pathway'] == node]['gene'])
         return len(input_genes + input_pathways)
 
+    
+    def drop_pathways(self, pathways=[]):
+        id_pathways = self.pathway_encoding[self.pathway_encoding['ID'].isin(pathways)]
+        name_pathways = self.pathway_encoding[self.pathway_encoding['pathway'].isin(pathways)]
+        to_drop = pd.concat([id_pathways, name_pathways]).drop_duplicates('ID')
+        
+        for i in to_drop['ID']:
+            self.graph.remove_node(i)
+            print('removed: ', to_drop[to_drop['ID'] == i]['pathway'].values[0])
+        
     def get_layers(self, trim):
         """
         Generating a pd.DataFrame with the adjacency matrix between nodes of one layer to the next. An adjacency matrix
@@ -214,6 +225,7 @@ class ReactomeNetwork:
                 extra_mask[col].loc[ind]= reg_relations_filtered['weight'].loc[(reg_relations_filtered['Origin']==col) &(reg_relations_filtered['Target']==ind)].values 
         print('Added regulatory layer')
         return extra_mask
+    
 
     def get_masks(self, nbr_genetic_input_types, regulatory=False):
         """
