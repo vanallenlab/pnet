@@ -1,0 +1,7 @@
+Metadata-Version: 2.1
+Name: pnet
+Version: 0.1.0
+Summary: Biologically informed deep neural network model for fast and accurate biological predictions with model built-in interpretability by design
+Author: Marc Glettig
+Author-email: marc.glettig@gmail.com
+License-File: LICENSE
