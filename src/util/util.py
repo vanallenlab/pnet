@@ -78,14 +78,6 @@ def load_tcga_dataset(directory_path, load_mut=False, rna_standardized=True):
         return rna[genes], cna[genes], tumor_type
 
 
-def select_highly_variable_genes(df, bins=10, genes_per_bin=100):
-    if len(df.columns) < bins*genes_per_bin:
-        raise ValueError('Want to select more genes than present in Input')
-    bin_assignment = pd.DataFrame(pd.qcut(df.sum(axis=0), 10, labels=False, duplicates='drop'), columns=['bin'])
-    gene_std = pd.DataFrame(df.std(), columns=['std'])
-    return bin_assignment.join(gene_std).groupby('bin')['std'].nlargest(genes_per_bin).reset_index()
-
-
 def draw_auc(fpr, tpr, auc_score, draw, save=False):
     if isinstance(fpr, list):
         fpr, tpr = fpr[draw], tpr[draw]
@@ -190,7 +182,15 @@ def select_non_constant_genes(df, cutoff=0.05):
     :param cutoff: float; percentage of unique values we require
     :return: list(str); list of genes that are not constant in dataframe
     """
-    return df.loc[:, df.nunique()/df.count() > 0.05]
+    return df.loc[:, df.nunique()/df.count() > cutoff].columns
+
+
+def select_highly_variable_genes(df, bins=10, genes_per_bin=100):
+    if len(df.columns) < bins*genes_per_bin:
+        raise ValueError('Want to select more genes than present in Input')
+    bin_assignment = pd.DataFrame(pd.qcut(df.sum(axis=0), bins, labels=False, duplicates='drop'), columns=['bin'])
+    gene_std = pd.DataFrame(df.std(), columns=['std'])
+    return bin_assignment.join(gene_std).groupby('bin')['std'].nlargest(genes_per_bin).reset_index()['Hugo_Symbol'].tolist()
 
 
 def shuffle_connections(mask):

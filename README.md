@@ -8,3 +8,6 @@ Pnet uses the Reactome hierarchical graph as underlying structure to reduce the 
 
 ## Installation
 Once you cloned the repo, cd into it and run ```pip install -e . ```
+
+## Usage
+Detailed sepcific usage examples are provided in the notebooks. Generally the network structure expects gene level data for each sample (e.g. read counts, CNA indication etc.). different data modalities can be concatenated as a dictonary and passed to the pnet_loader object. 

@@ -3,6 +3,7 @@ from torch.utils.data import Dataset, DataLoader
 import pandas as pd
 import random
 import numpy as np
+import os
 
 
 # DataLoader object for pytorch. Constructing single loader for all data input modalities.
@@ -82,6 +83,9 @@ class PnetDataset(Dataset):
         return input_df.loc[self.inds]
     
     def save_indicies(self, path):
+        d = '/'.join(path.split('/')[:-1])
+        if not os.path.exists(d):
+            os.makedirs(d)
         df = pd.DataFrame(data={"indicies": self.inds})
         df.to_csv(path, sep=',',index=False)
 

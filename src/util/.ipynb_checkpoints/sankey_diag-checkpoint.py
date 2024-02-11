@@ -10,11 +10,15 @@ PATHWAY_COLOR = '#00629B'
 RES_COLOR = '#FFA300'
 
 class SankeyDiag:
-    def __init__(self, imps_dir, target=None, runs=1):
+    def __init__(self, imps, target=None, runs=1):
         if runs>1:
-            self.all_imps = self.load_multiple_runs(imps_dir, runs)
+            self.all_imps = self.load_multiple_runs(imps, runs)
         else:
-            self.all_imps = self.load_importance_scores(imps_dir)
+            if isinstance(imps, str):
+                self.all_imps = self.load_importance_scores(imps)
+            else:
+                'Assuming input was a dictonairy with layer names and importance dataframes in output format of Pnet.interpret'
+                self.all_imps = self.format_importance_scores(imps)
         self.grouped_imps = self.group_importance_scores(target)
         self.normalize_layerwise()
         self.rn = self.get_reactome_network_for_imps()
@@ -47,6 +51,15 @@ class SankeyDiag:
             df_imps = pd.DataFrame(columns=['Importance', 'Layer'])
             imps = pd.read_csv('{}{}_importances.csv'.format(results_dir, l)).set_index('Unnamed: 0')
             df_imps = imps.reset_index().melt(id_vars='Unnamed: 0', var_name='Gene/Pathway', value_name='Importance').rename(columns={'Unnamed: 0': 'Sample'})
+            df_imps['Layer'] = l
+            all_imps = pd.concat([all_imps, df_imps])
+        return all_imps
+    
+    
+    def format_importance_scores(self, layer_list_dict):
+        all_imps = pd.DataFrame(columns=['Importance', 'Layer'])
+        for l in layer_list_dict:
+            df_imps = layer_list_dict[l].reset_index().melt(id_vars='index', var_name='Gene/Pathway', value_name='Importance').rename(columns={'index': 'Sample'})
             df_imps['Layer'] = l
             all_imps = pd.concat([all_imps, df_imps])
         return all_imps

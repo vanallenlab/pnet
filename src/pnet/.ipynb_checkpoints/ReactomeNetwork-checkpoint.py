@@ -13,7 +13,6 @@ class ReactomeNetwork:
         self.hierarchy = self.load_hierarchy()
         self.graph = self.generate_graph()
         self.drop_pathways(pathways_to_drop)
-        print(os.getcwd())
         self.reg_relations= pd.read_csv('../data/regulatory/collectri_filtered.csv')
 
         # Store metadata and prepare for mask extraction
