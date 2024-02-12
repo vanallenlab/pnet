@@ -16,8 +16,6 @@ def load_genes(filename=gene2pathway_loc, genes_start_col=2, pathway_col=1):
 
         for row in data_list:
             genes = row.strip().split('\t')
-            # genes = [re.sub('_copy.*', '', g) for g in genes]
-            # genes = [re.sub('\\n.*', '', g) for g in genes]  ## why??????????
             for gene in genes[genes_start_col:]:
                 pathway = genes[pathway_col]
                 dict = {'pathway': pathway, 'gene': gene}

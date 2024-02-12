@@ -1,3 +1,6 @@
+from pnet import ReactomeNetworkOG, pnet_loader, CustomizedLinear
+from util import util, sankey_diag
+
 import pandas as pd
 import matplotlib.pyplot as plt
 import torch
@@ -6,14 +9,11 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch.optim.lr_scheduler import StepLR
 from torchmetrics.classification import BinaryAUROC
+import pytorch_lightning as pl
 import numpy as np
 import os
 import warnings
-import pytorch_lightning as pl
 import captum
-import ReactomeNetworkOG
-import pnet_loader
-from CustomizedLinear import masked_activation
 import util
 
 
@@ -28,8 +28,8 @@ class PNET_Block(nn.Module):
         :param dropout: float; fraction of connections to randomly drop out, applied on layer output
         """
         super(PNET_Block, self).__init__()
-        self.gene_layer = nn.Sequential(*masked_activation(gene_mask, activation=activation, batchnorm=batchnorm, dropout=gene_dropout))
-        self.pathway_layer = nn.Sequential(*masked_activation(pathway_mask, activation=activation, batchnorm=batchnorm, dropout=dropout))
+        self.gene_layer = nn.Sequential(*CustomizedLinear.masked_activation(gene_mask, activation=activation, batchnorm=batchnorm, dropout=gene_dropout))
+        self.pathway_layer = nn.Sequential(*CustomizedLinear.masked_activation(pathway_mask, activation=activation, batchnorm=batchnorm, dropout=dropout))
 
     def forward(self, x, genes):
         x_genes = self.gene_layer(genes)
@@ -85,10 +85,10 @@ class PNET_NN(pl.LightningModule):
         self.layers = nn.ModuleList()
         self.preds = nn.ModuleList()
         # Add input layer to aggregate all data modalities
-        self.input_layer = nn.Sequential(*masked_activation(pathway_masks[0], activation=self.activation, batchnorm=True, dropout=self.input_dropout))
+        self.input_layer = nn.Sequential(*CustomizedLinear.masked_activation(pathway_masks[0], activation=self.activation, batchnorm=True, dropout=self.input_dropout))
         # Add layers and prediction heads for each pathway level:
         for i in range(1, len(pathway_masks)):
-            self.layers.append(nn.Sequential(*masked_activation(pathway_masks[i], activation=self.activation, batchnorm=True, dropout=self.dropout)))
+            self.layers.append(nn.Sequential(*CustomizedLinear.masked_activation(pathway_masks[i], activation=self.activation, batchnorm=True, dropout=self.dropout)))
             self.preds.append(nn.Sequential(*[nn.Linear(in_features=pathway_masks[i].shape[0] + self.additional_dims, out_features=self.output_dim)]))
 
         # Weighting of the different prediction layers:
