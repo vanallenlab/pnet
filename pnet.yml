@@ -5,7 +5,6 @@ channels:
 dependencies:
   - bzip2=1.0.8
   - ca-certificates=2024.2.2
-  - ld_impl_linux-64=2.40
   - libexpat=2.5.0
   - libffi=3.4.2
   - libsqlite=3.45.1
