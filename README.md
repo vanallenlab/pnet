@@ -10,7 +10,7 @@ Pnet uses the Reactome hierarchical graph as underlying structure to reduce the 
 1. Clone the github repository and navigate into it.
 2. Create the conda environment with ```conda env create -f pnet.yml```, activate it with ```conda activate pnet```
 3. Run ```pip install -e . ``` to install the package locally.
-4. To check successful installation run ```python test/test_data_loader.py``` which will verify basic import and file structure.
+4. To check successful installation run ```python test/test_data_loading.py``` which will verify basic import and file structure.
 
 For further functional testing see the [testing notebook](https://github.com/vanallenlab/pnet/blob/main/notebooks/testing.ipynb)
 
