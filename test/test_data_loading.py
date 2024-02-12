@@ -1,9 +1,8 @@
-import pnet_loader
-import util
+from pnet import pnet_loader, Pnet
+from util import util, sankey_diag
 import torch
 import pandas as pd
 import numpy as np
-import Pnet
 import random
 import pickle
 import os
@@ -47,12 +46,12 @@ def main():
     # with open('../data/test_data/gene_sublist.txt', 'wb') as fp:
     #     pickle.dump(gene_list, fp)
 
-    test_rna = pd.read_csv('../data/test_data/rna.csv').set_index('sample_id')
-    test_cna = pd.read_csv('../data/test_data/cna.csv').set_index('sample_id')
-    test_add = pd.read_csv('../data/test_data/add.csv').set_index('sample_id')
-    test_y = pd.read_csv('../data/test_data/y.csv').set_index('sample_id')
+    test_rna = pd.read_csv('data/test_data/rna.csv').set_index('sample_id')
+    test_cna = pd.read_csv('data/test_data/cna.csv').set_index('sample_id')
+    test_add = pd.read_csv('data/test_data/add.csv').set_index('sample_id')
+    test_y = pd.read_csv('data/test_data/y.csv').set_index('sample_id')
 
-    with open('../data/test_data/gene_sublist.txt', 'rb') as fp:
+    with open('data/test_data/gene_sublist.txt', 'rb') as fp:
         gene_list = pickle.load(fp)
 
     genetic_data = {'rna': test_rna, 'cna': test_cna}
@@ -65,7 +64,7 @@ def main():
                                                                   collinear_features=2)
 
     assert set(gene_list) == set(train_dataset.genes), 'Training dataset expected to have the same gene set as in file'
-    assert train_dataset.genes == list(train_dataset.input_df.columns)[:500], 'Training data genes should be ordered \
+    assert train_dataset.genes == [x.split('_')[0] for x in list(train_dataset.input_df.columns)[:500]], 'Training data genes should be ordered \
                                                                                 as stored in the genes variable'
     assert train_dataset.input_df.shape == torch.Size([16, 1000]), 'Input DataFrame expected to be a of size\
                                                             [16, 1000], got: {}'.format(train_dataset.input_df.shape)
